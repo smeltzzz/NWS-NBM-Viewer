@@ -82,6 +82,13 @@ Copy `.env.example` → `.env`. Every key is documented there. The essentials:
 - Frontend: Next.js 14 App Router + TypeScript + Tailwind, full-viewport map
   layout, MapLibre GL with a demo tile source, layer/legend/forecast-hour UI,
   `/api/health` proxy route.
+- Frontend temporal navigation: timeline dock (`src/components/timeline/`) with
+  UTC valid-time banner + local time, `F024 +24h` projection chip, non-linear
+  scrub bar over the full NBM ladder (hourly f001-f036, 3-hourly f039-f072,
+  6-hourly f078-f264) with 00Z day/accumulation ticks, transport buttons +
+  hotkeys (`←/→`, `Space`, `[`/`]`, `Home`/`End`), 1-10 fps looping engine with
+  forward/rocking modes and a hidden-`Image` tile preloader (next-3-frames,
+  LRU-bounded). Leak audit: `npm run verify:timeline --workspace frontend`.
 - Docker: dev (hot-reload) + prod (standalone) image stages and `docker-compose.yml`.
 
 **Next milestones**

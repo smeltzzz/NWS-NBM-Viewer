@@ -12,10 +12,10 @@
  * Responsive: sidebar collapses to bottom sheet on mobile.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/lib/api';
-import { computeFallbackCycle, defaultForecastHours } from '@/lib/nbm';
+import { computeFallbackCycle } from '@/lib/nbm';
 import type { NbmDomain, NbmProduct, OverlayToggles } from '@/lib/types';
 import type { UnitSystem } from '@/lib/units';
 
@@ -24,7 +24,9 @@ import { ProductSelector } from '@/components/controls/ProductSelector';
 import { Legend as NewLegend } from '@/components/controls/Legend';
 import { CATEGORIES, getProductById, type NBMProductDef, type ProductType, type Accumulation, type Percentile } from '@/components/controls/catalog';
 
-import { MapContainer } from '@/components/map/MapContainer';
+import { PlaybackControls, TimelineBar, canonicalForecastHours, frameTileUrls, useTimeline } from '@timeline/index';
+
+import { MapContainer, type MapHandle } from '@/components/map/MapContainer';
 import { OverlayControls } from '@/components/map/OverlayControls';
 import { ProbeReadout } from '@/components/map/ProbeReadout';
 import { StatusBadge } from '@/components/map/StatusBadge';
@@ -72,7 +74,7 @@ export function MapShell({
   const [product, setProduct] = useState<NbmProduct>(initialProduct);
   const [forecastHour, setForecastHour] = useState(initialForecastHour);
   const [cycle, setCycle] = useState<string>(() => computeFallbackCycle());
-  const [availableHours, setAvailableHours] = useState<number[]>(() => defaultForecastHours());
+  const [availableHours, setAvailableHours] = useState<number[]>(() => canonicalForecastHours());
   const [availableCycles, setAvailableCycles] = useState<string[]>([]);
   const [runStatus, setRunStatus] = useState<'complete' | 'ingesting' | 'pending'>('complete');
   const [ingestionProgress, setIngestionProgress] = useState<number | undefined>(undefined);
@@ -99,6 +101,31 @@ export function MapShell({
   const [selectedThreshold, setSelectedThreshold] = useState<string | undefined>(undefined);
 
   const isMobile = useIsMobile(1024);
+
+  // Live map instance — lets the preloader compute viewport tile coverage.
+  const mapHandleRef = useRef<MapHandle | null>(null);
+
+  // ── Temporal navigation controller ────────────────────────────────────────
+  // Concrete per-frame tile URLs over the current viewport: the engine
+  // preloads the next 3 frames through hidden Images while playing.
+  const getTileUrls = useCallback(
+    (hour: number) =>
+      frameTileUrls(mapHandleRef.current?.getMap() ?? null, {
+        domain,
+        cycle,
+        element: variable,
+        fhour: hour,
+      }),
+    [domain, cycle, variable],
+  );
+
+  const timeline = useTimeline({
+    hours: availableHours,
+    hour: forecastHour,
+    onHourChange: setForecastHour,
+    tileEpoch: `${domain}|${cycle}|${variable}`,
+    getTileUrls,
+  });
 
   // On mobile, sidebar starts closed as bottom sheet
   useEffect(() => {
@@ -168,7 +195,7 @@ export function MapShell({
             setAvailableHours(hours);
             setForecastHour((h) => (hours.includes(h) ? h : hours[0] ?? h));
           } else {
-            setAvailableHours(defaultForecastHours());
+            setAvailableHours(canonicalForecastHours());
           }
 
           // Run status: if latest cycle is recent, mark ingesting
@@ -280,7 +307,7 @@ export function MapShell({
 
         {/* Map area */}
         <div className={`relative flex-1 ${!isMobile && sidebarOpen ? 'ml-[340px]' : 'ml-0'} transition-all duration-300`}>
-          <MapContainer domain={domain} className="absolute inset-0">
+          <MapContainer ref={mapHandleRef} domain={domain} className="absolute inset-0">
             <WeatherRasterLayer
               domain={domain}
               cycle={cycle}
@@ -297,36 +324,36 @@ export function MapShell({
             />
           </MapContainer>
 
-          {/* Forecast hour scrubber - centered bottom */}
-          <div className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 flex justify-center p-2 pb-3">
-            <div className="pointer-events-auto flex w-full max-w-[560px] items-center gap-3 rounded-full border border-white/10 bg-[#0c1424]/90 px-4 py-2 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur-xl">
-              <span className="whitespace-nowrap text-[10px] font-bold uppercase tracking-widest text-white/50">
-                Forecast Hour
-              </span>
-              <span className="rounded-full bg-sky-500/20 px-2 py-0.5 font-mono text-[11px] font-bold text-sky-300">
-                F{String(forecastHour).padStart(3,'0')}
-              </span>
-              <input
-                type="range"
-                min={Math.min(...availableHours)}
-                max={Math.max(...availableHours)}
-                step={1}
-                value={forecastHour}
-                onChange={e => {
-                  let v = Number(e.target.value);
-                  v = availableHours.reduce((prev, curr) => Math.abs(curr - v) < Math.abs(prev - v) ? curr : prev);
-                  setForecastHour(v);
-                }}
-                className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-white/15 accent-sky-400"
-              />
-              <span className="hidden text-[10px] font-mono text-white/30 md:inline">
-                {validTime ?? ''}
-              </span>
-            </div>
-          </div>
+          {/* Temporal navigation dock — scrub bar + transport controls */}
+          <TimelineBar
+            hours={availableHours}
+            cycle={cycle}
+            forecastHour={forecastHour}
+            index={timeline.index}
+            onSeekIndex={timeline.seekIndex}
+            buffering={timeline.buffering}
+            onHoverIndex={(hoverIndex) => {
+              if (hoverIndex !== null) timeline.preloadFromIndex(hoverIndex);
+            }}
+          >
+            <PlaybackControls
+              index={timeline.index}
+              count={timeline.count}
+              playing={timeline.playing}
+              fps={timeline.fps}
+              loopMode={timeline.loopMode}
+              onTogglePlay={timeline.togglePlay}
+              onStep={timeline.step}
+              onJumpHours={timeline.jumpHours}
+              onFirst={timeline.first}
+              onLast={timeline.last}
+              onFpsChange={timeline.setFps}
+              onLoopModeChange={timeline.setLoopMode}
+            />
+          </TimelineBar>
 
-          {/* Overlay controls - desktop left bottom */}
-          <div className="pointer-events-none absolute bottom-[64px] left-4 z-20 hidden lg:block">
+          {/* Overlay controls - desktop left bottom (above the timeline dock) */}
+          <div className="pointer-events-none absolute bottom-[112px] left-4 z-20 hidden lg:block">
             <OverlayControls
               opacity={opacity}
               onOpacityChange={setOpacity}
@@ -336,8 +363,8 @@ export function MapShell({
             />
           </div>
 
-          {/* Legend - floating */}
-          <div className="pointer-events-none absolute bottom-[64px] right-4 z-20 flex flex-col items-end gap-2 lg:bottom-4">
+          {/* Legend - floating (above the timeline dock) */}
+          <div className="pointer-events-none absolute bottom-[112px] right-4 z-20 flex flex-col items-end gap-2">
             <NewLegend
               product={activeProductDef}
               variable={variable}
