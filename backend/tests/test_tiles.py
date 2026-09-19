@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 
 def test_capabilities() -> None:
     with TestClient(app) as client:
-        response = client.get(f"{settings.api_prefix}/tiles/capabilities")
+        response = client.get(f"{settings.api_prefix}/tiles/demo/capabilities")
         assert response.status_code == 200
         body = response.json()
         assert body["format"] == "png"

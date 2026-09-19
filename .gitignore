@@ -52,7 +52,10 @@ data/
 cache/
 caches/
 .tilecache/
-tiles/
+# Anchored on purpose: a bare `tiles/` matches at any depth and would also
+# swallow backend/app/tiles/, which is the tiling pipeline source, not output.
+/tiles/
+/backend/tiles/
 rasters/
 tmp/
 temp/
