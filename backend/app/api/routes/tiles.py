@@ -105,7 +105,10 @@ def preview(
     )
 
 
-@router.get("/capabilities", summary="Describe tile service capabilities")
+# NOTE: the service-wide capability document now lives in
+# app.api.endpoints.tiles (the GRIB/WebP pipeline).  This one only describes
+# the legacy demo PNG surface.
+@router.get("/demo/capabilities", summary="Describe the demo PNG surface")
 def capabilities() -> dict[str, object]:
     return {
         "format": "png",

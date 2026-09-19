@@ -29,6 +29,9 @@ rio-tiler>=6.6.0,<8.0.0
 pyproj>=3.6.1,<4.0.0
 shapely>=2.0.6,<3.0.0
 morecantile>=5.4.2,<7.0.0
+# WebP tile encoding (lossy + exact-alpha). Not pulled in by rio-tiler or
+# rasterio, but imported directly by app/tiles/renderer.py.
+Pillow>=10.2.0,<12.0.0
 
 # ── Numerics (percentile/quantile handling, colour ramps, smoothing) ────────
 numpy>=1.26.0,<3.0.0

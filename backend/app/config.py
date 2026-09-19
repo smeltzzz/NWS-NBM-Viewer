@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     tile_cache_dir: Path = Path("./data/tilecache")
     cache_size_limit_gb: float = Field(default=20.0, gt=0)
     tile_cache_ttl_seconds: int = Field(default=3600, ge=0)
+    #: Layer-2 lifetime for tiles of the *latest* cycle.  NBM re-publishes the
+    #: live cycle as messages arrive, so it is held no longer than the
+    #: ``Cache-Control`` we advertise to clients.
+    tile_cache_ttl_latest_seconds: int = Field(default=300, ge=0)
     inventory_cache_ttl_seconds: int = Field(default=300, ge=0)
     cache_backend: Literal["disk", "redis"] = "disk"
     redis_url: str = "redis://redis:6379/0"
@@ -136,6 +140,36 @@ class Settings(BaseSettings):
     colormap_mode: Literal["server", "raw"] = "server"
     colormaps_default: str = "nbm_temp,nbm_precip,nbm_wind,nbm_rh,nbm_pop"
 
+    # ── Raster tiling pipeline (/backend/app/tiles) ────────────────────────
+    # Layer-1 LRU budget for *decoded* GRIB grids, in MiB.  A CONUS float32
+    # field is ~9 MB, so 512 MiB holds a few dozen variables/forecast hours.
+    tile_grid_cache_mb: int = Field(default=512, ge=16, le=8192)
+    tile_grid_cache_entries: int = Field(default=128, ge=1)
+
+    # Layer-2 HTTP cache policy.  A published cycle never changes, so its
+    # tiles are immutable; the newest cycle may still gain forecast hours.
+    tile_cache_max_age_historical: int = Field(default=86400, ge=0)
+    tile_cache_max_age_latest: int = Field(default=300, ge=0)
+    latest_cycle_tolerance_hours: int = Field(default=3, ge=0, le=48)
+
+    # WebP encoder.  Lossy at q=82 is ~30% smaller than PNG at equal quality;
+    # `method` trades encode CPU for size (0=fast, 6=best).
+    tile_webp_quality: int = Field(default=82, ge=0, le=100)
+    tile_webp_lossless: bool = False
+    tile_webp_method: int = Field(default=4, ge=0, le=6)
+    tile_warp_threads: int = Field(default=2, ge=1, le=16)
+    tile_smooth_radius: int = Field(default=1, ge=0, le=4)
+    tile_empty_response: Literal["no_content", "image"] = "no_content"
+
+    # Which data source feeds the tiler: s3 | local | synthetic | auto.
+    tile_data_source: Literal["s3", "local", "synthetic", "auto"] = "auto"
+    tile_grib_dir: Path = Path("./data/grib")
+    # Sampling factor for the synthetic CONUS/AK grids.  1 reproduces the real
+    # NBM extent (~2100x1100 at 2.5 km); 4 keeps the test-suite snappy.
+    tile_synthetic_downsample: int = Field(default=4, ge=1, le=16)
+    # Force the synthetic source without touching tile_data_source (CI/offline).
+    nbm_tile_offline: bool = False
+
     # ── Scheduler ──────────────────────────────────────────────────────────
     scheduler_enabled: bool = False
     inventory_refresh_minutes: int = Field(default=15, ge=1)
@@ -150,7 +184,7 @@ class Settings(BaseSettings):
             value = f"/{value}"
         return value.rstrip("/")
 
-    @field_validator("tile_cache_dir", mode="before")
+    @field_validator("tile_cache_dir", "tile_grib_dir", mode="before")
     @classmethod
     def _expand_cache_dir(cls, value: object) -> object:
         if isinstance(value, str):
