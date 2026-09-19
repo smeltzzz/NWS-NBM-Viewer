@@ -1,0 +1,28 @@
+# ── Build context exclusions for the frontend image ──────────────────────────
+node_modules/
+.next/
+out/
+.turbo/
+npm-debug.log*
+yarn-error.log*
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Test / lint artifacts
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# Editors / OS
+.git/
+.gitignore
+.DS_Store
+.idea/
+.vscode/

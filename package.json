@@ -1,0 +1,33 @@
+{
+  "name": "nws-nbm-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Real-time map viewer for the NOAA/NWS National Blend of Models (NBM v4.2+) — deterministic, percentile and exceedance elements.",
+  "license": "MIT",
+  "workspaces": [
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=20.9.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c cyan,magenta \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "cd backend && sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000; else python3 -m uvicorn main:app --reload --host 0.0.0.0 --port 8000; fi'",
+    "dev:frontend": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace frontend",
+    "start": "npm run start --workspace frontend",
+    "lint": "npm run lint --workspace frontend",
+    "typecheck": "npm run typecheck --workspace frontend",
+    "test": "npm run test:backend",
+    "test:backend": "cd backend && sh -c 'if [ -x .venv/bin/python ]; then .venv/bin/python -m pytest -q; else python3 -m pytest -q; fi'",
+    "setup:backend": "python3 -m venv backend/.venv && backend/.venv/bin/python -m pip install --upgrade pip && backend/.venv/bin/python -m pip install -r backend/requirements.txt",
+    "setup": "npm install && npm run setup:backend",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down --remove-orphans",
+    "docker:logs": "docker compose logs -f --tail=100"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
