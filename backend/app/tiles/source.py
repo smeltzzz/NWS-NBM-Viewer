@@ -43,6 +43,7 @@ from app.logging_config import get_logger
 from app.tiles.grib import Grid, decode_message, encode_message
 
 __all__ = [
+    "ElementFetchMeta",
     "ElementNotRenderable",
     "GridRequest",
     "RenderPlan",
@@ -50,6 +51,7 @@ __all__ = [
     "LocalGribSource",
     "SyntheticGribSource",
     "domain_grid",
+    "element_fetch_meta",
     "get_data_source",
     "render_plan",
 ]
@@ -149,6 +151,42 @@ def render_plan(element: str) -> RenderPlan:
         )
     colormap, unit_kind, grib_unit = match
     return RenderPlan(element, colormap, unit_kind, grib_unit, meta.master_source)
+
+
+@dataclass(frozen=True)
+class ElementFetchMeta:
+    """Product stream + GRIB selector for any catalog element (tile or probe)."""
+
+    element: str
+    product: str
+    grib_parameter: str
+    #: Optional render plan when the element is paint-able.
+    render: RenderPlan | None = None
+
+
+@functools.lru_cache(maxsize=512)
+def element_fetch_meta(element: str) -> ElementFetchMeta:
+    """Resolve fetch metadata without requiring a colour ramp.
+
+    Used by the point-probe / meteogram path, which must sample wind direction
+    and other non-renderable fields that :func:`render_plan` rejects.
+    """
+    code = element.strip().lower()
+    meta = ELEMENT_CATALOG.get(code)
+    if meta is None:
+        raise KeyError(
+            f"{element!r} is not a known NBM element; see /api/v1/tiles/capabilities"
+        )
+    try:
+        plan = render_plan(code)
+    except ElementNotRenderable:
+        plan = None
+    return ElementFetchMeta(
+        element=code,
+        product=meta.master_source,
+        grib_parameter=meta.grib_parameter,
+        render=plan,
+    )
 
 
 def renderable_elements() -> dict[str, str]:
@@ -287,6 +325,10 @@ class DataSource(Protocol):
 
     async def close(self) -> None: ...
 
+    # Optional fast path used by the point-probe / meteogram service.  When
+    # implemented, callers can skip the GRIB encode→decode round-trip.
+    # async def grid(self, request: GridRequest) -> Grid: ...
+
 
 class S3GribSource:
     """Production source: ``.idx`` byte-range resolution against NODD."""
@@ -301,14 +343,15 @@ class S3GribSource:
         self._index_lock = asyncio.Lock()
 
     async def message(self, request: GridRequest) -> bytes:
-        from app.core.s3_client import IdxEntry, S3ClientError
+        from app.core.s3_client import S3ClientError
 
-        plan = render_plan(request.element)
-        selector = ELEMENT_CATALOG[request.element].grib_parameter
+        meta = element_fetch_meta(request.element)
+        selector = meta.grib_parameter
+        product = meta.product
 
         async with self._index_lock:
             entries = await self._client.fetch_idx(
-                request.date, request.hour, plan.product, request.fhour, request.domain
+                request.date, request.hour, product, request.fhour, request.domain
             )
 
         entry = _select_entry(entries, selector)
@@ -325,7 +368,7 @@ class S3GribSource:
             )
 
         key = self._client.grib_key(
-            request.date, request.hour, plan.product, request.fhour, request.domain
+            request.date, request.hour, product, request.fhour, request.domain
         )
         start, end = byte_range
         log.debug(
@@ -376,10 +419,10 @@ class LocalGribSource:
         self.directory = Path(directory)
 
     async def message(self, request: GridRequest) -> bytes:
-        plan = render_plan(request.element)
+        meta = element_fetch_meta(request.element)
         candidate = (
             self.directory
-            / f"blend.t{request.hour:02d}z.{plan.product}."
+            / f"blend.t{request.hour:02d}z.{meta.product}."
             f"f{request.fhour:03d}.{request.domain}.grib2"
         )
         if not candidate.is_file():
@@ -418,6 +461,23 @@ class SyntheticGribSource:
         "cape": (0.0, 4500.0),
         "reflectivity": (0.0, 68.0),
         "probabilities": (0.0, 100.0),
+        # Probe-only (no tile colormap) synthetic ranges, still imperial-ish.
+        "direction": (0.0, 360.0),
+        "index": (0.0, 5.0),
+        "distance": (0.0, 30000.0),  # feet
+    }
+
+    #: unit_kind → (low, high) when no colormap is assigned.
+    _KIND_RANGES: dict[str, tuple[float, float]] = {
+        "temperature": (-10.0, 105.0),
+        "length": (0.0, 6.0),
+        "speed": (0.0, 55.0),
+        "percent": (0.0, 100.0),
+        "direction": (0.0, 360.0),
+        "energy": (0.0, 4500.0),
+        "reflectivity": (0.0, 68.0),
+        "index": (0.0, 5.0),
+        "distance": (0.0, 30000.0),
     }
 
     def __init__(self, *, downsample: int | None = None) -> None:
@@ -430,34 +490,90 @@ class SyntheticGribSource:
     async def message(self, request: GridRequest) -> bytes:
         return await asyncio.to_thread(self._message_sync, request)
 
+    async def grid(self, request: GridRequest) -> Grid:
+        """Decoded grid without a GRIB encode/decode round-trip.
+
+        The meteogram path samples hundreds of ``(element, fhour)`` pairs; going
+        through ``encode_message`` → ``decode_message`` for each one dominates
+        wall time.  Building the array directly keeps the synthetic source
+        honest (same field function) while staying fast enough for CI.
+        """
+        return await asyncio.to_thread(self._grid_sync, request)
+
+    def _grid_sync(self, request: GridRequest) -> Grid:
+        field, parameter, dgrid = self._field_for(request)
+        return Grid(
+            values=np.ascontiguousarray(field, dtype=np.float32),
+            transform=dgrid.transform,
+            crs=dgrid.crs,
+            parameter=parameter,
+            source_bytes=int(field.nbytes),
+        )
+
     def _message_sync(self, request: GridRequest) -> bytes:
         with self._lock:
             cached = self._cache.get(request.cache_key)
         if cached is not None:
             return cached
 
-        plan = render_plan(request.element)
-        grid = domain_grid(request.domain, downsample=self.downsample)
-        low, high = self._RANGES.get(plan.colormap, (0.0, 100.0))
-
-        # Canonical units are converted back to GRIB's SI units so the decode
-        # path exercises the same normalisation as a real NOAA message.
-        field = self._build_field(grid, request, low, high, plan.colormap)
-        field = _imperial_to_grib(field, plan)
-
+        field, parameter, dgrid = self._field_for(request)
         payload = encode_message(
             field,
-            crs=grid.crs,
-            transform=grid.transform,
-            parameter=plan.element.upper(),
+            crs=dgrid.crs,
+            transform=dgrid.transform,
+            parameter=parameter,
         )
         with self._lock:
             # Bound the source's own buffer cache; layer 1 caches the decoded
-            # grid, this only avoids re-encoding the same message.
-            if len(self._cache) > 64:
-                self._cache.pop(next(iter(self._cache)))
+            # grid, this only avoids re-encoding the same message.  Sized for
+            # meteogram workloads (many elements × many forecast hours).
+            if len(self._cache) > 2048:
+                # Drop the oldest half to keep inserts amortised O(1).
+                for stale in list(self._cache.keys())[:1024]:
+                    self._cache.pop(stale, None)
             self._cache[request.cache_key] = payload
         return payload
+
+    def _field_for(
+        self, request: GridRequest
+    ) -> tuple[np.ndarray, str, "DomainGrid"]:
+        fetch = element_fetch_meta(request.element)
+        dgrid = domain_grid(request.domain, downsample=self.downsample)
+
+        if fetch.render is not None:
+            plan = fetch.render
+            low, high = self._RANGES.get(plan.colormap, (0.0, 100.0))
+            field = self._build_field(dgrid, request, low, high, plan.colormap)
+            field = _imperial_to_grib(field, plan)
+            return field, plan.element.upper(), dgrid
+
+        field, parameter = self._build_probe_field(dgrid, request)
+        return field, parameter, dgrid
+
+    def _build_probe_field(
+        self, grid: "DomainGrid", request: GridRequest
+    ) -> tuple[np.ndarray, str]:
+        """Synthetic field for elements that have no tile colour ramp."""
+        from app.probe.elements import probe_element_plan
+
+        plan = probe_element_plan(request.element)
+        low, high = self._KIND_RANGES.get(plan.unit_kind, (0.0, 100.0))
+        field = self._build_field(grid, request, low, high, plan.unit_kind)
+        # Convert imperial-ish synthetic values into GRIB native units.
+        if plan.unit_kind == "temperature":
+            field = ((field - 32.0) * 5.0 / 9.0 + 273.15).astype(np.float32)
+        elif plan.unit_kind == "length":
+            field = (field * 25.4).astype(np.float32)
+        elif plan.unit_kind == "speed":
+            field = (field * 0.5144444444444444).astype(np.float32)
+        elif plan.unit_kind == "distance":
+            # Synthetic range is feet → metres for GRIB.
+            field = (field * 0.3048).astype(np.float32)
+        elif plan.unit_kind == "direction":
+            field = (field % 360.0).astype(np.float32)
+        elif plan.unit_kind == "index":
+            field = np.round(field).astype(np.float32)
+        return field.astype(np.float32), plan.element.upper()
 
     @staticmethod
     def _build_field(
@@ -544,6 +660,28 @@ class _AutoSource:
                 self._active = self._fallback
                 return await self._active.message(request)
             raise
+
+    async def grid(self, request: GridRequest) -> Grid:
+        if self._active is None:
+            self._active = await self._probe()
+        grid_fn = getattr(self._active, "grid", None)
+        if callable(grid_fn):
+            try:
+                return await grid_fn(request)
+            except (LookupError, OSError) as exc:
+                if self._active is self._primary and not self._degraded:
+                    log.warning(
+                        "S3 grid fetch failed (%s); serving %s/%s from synthetic",
+                        exc,
+                        request.domain,
+                        request.element,
+                    )
+                    self._degraded = True
+                    self._active = self._fallback
+                    return await self._fallback.grid(request)
+                raise
+        message = await self.message(request)
+        return await asyncio.to_thread(decode_message, message)
 
     async def _probe(self) -> DataSource:
         if not settings.nbm_tile_offline:

@@ -53,7 +53,9 @@ Then visit <http://127.0.0.1:8000/docs> (Swagger) and
 | GET    | `/tiles/preview.png`                           | Full-field preview PNG               |
 | GET    | `/tiles/capabilities`                          | Tile service description             |
 | GET    | `/colormaps` / `/colormaps/{name}`             | Colour ramp catalog                  |
-
+| GET    | `/probe/point`                                 | Map-click point values at one fhour  |
+| GET    | `/probe/meteogram`                             | Full 264-h meteogram time series     |
+| GET    | `/probe/capabilities`                          | Probe service description            |
 ## Environment
 
 Copy `.env.example` (repo root) to `.env`. All keys are documented there; the
