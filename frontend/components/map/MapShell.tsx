@@ -2,18 +2,31 @@
 
 /**
  * Map shell: full-viewport MapLibre map + overlay controls.
- * This is the top of the map-centric UI; everything below it is an overlay.
+ * This is the top of the map-centric UI; everything else floats above the map.
+ *
+ * State ownership: this component is the single source of truth for the
+ * active NBM selection (element / domain / product / forecast hour / cycle),
+ * the raster opacity and the overlay toggles. It discovers the latest
+ * published cycle from the backend (`/runs/latest`) and falls back to a
+ * client-computed cycle when the backend is unreachable.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-import { MapView, type MapHandle, type NbmLayer } from '@/components/map/MapView';
+import { api } from '@/lib/api';
+import { computeFallbackCycle, defaultForecastHours } from '@/lib/nbm';
+import type { NbmDomain, NbmProduct, OverlayToggles } from '@/lib/types';
+
 import { Legend } from '@/components/map/Legend';
+import { MapContainer } from '@/components/map/MapContainer';
+import { OverlayControls } from '@/components/map/OverlayControls';
+import { ProbeReadout } from '@/components/map/ProbeReadout';
 import { StatusBadge } from '@/components/map/StatusBadge';
 import { Toolbar } from '@/components/map/Toolbar';
-import { api } from '@/lib/api';
-import { DOMAINS } from '@/lib/nbm';
-import type { LayoutResponse, NbmDomain, NbmProduct } from '@/lib/types';
+import { VectorOverlays } from '@/components/map/VectorOverlays';
+import { RASTER_DEFAULT_OPACITY, WeatherRasterLayer } from '@/components/map/WeatherRasterLayer';
+
+const RUN_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
 
 interface MapShellProps {
   initialVariable?: string;
@@ -22,103 +35,116 @@ interface MapShellProps {
   initialForecastHour?: number;
 }
 
+const DEFAULT_TOGGLES: OverlayToggles = {
+  states: true,
+  counties: true,
+  cwaa: true,
+  highways: false,
+  rivers: false,
+  hillshade: true,
+};
+
 export function MapShell({
   initialVariable = 'tmp',
   initialDomain = 'co',
   initialProduct = 'core',
   initialForecastHour = 24,
 }: MapShellProps) {
-  const mapHandle = useRef<MapHandle | null>(null);
-
   const [variable, setVariable] = useState(initialVariable);
   const [domain, setDomain] = useState<NbmDomain>(initialDomain);
   const [product, setProduct] = useState<NbmProduct>(initialProduct);
   const [forecastHour, setForecastHour] = useState(initialForecastHour);
-  const [availableHours, setAvailableHours] = useState<number[]>(defaultHours());
+  const [cycle, setCycle] = useState<string>(() => computeFallbackCycle());
+  const [availableHours, setAvailableHours] = useState<number[]>(() => defaultForecastHours());
+  const [opacity, setOpacity] = useState<number>(RASTER_DEFAULT_OPACITY);
+  const [toggles, setToggles] = useState<OverlayToggles>(DEFAULT_TOGGLES);
+  const [cwaaAvailable, setCwaaAvailable] = useState(true);
 
-  const layer: NbmLayer = { variable, domain, product, forecastHour };
-
-  // Keep the raster source in sync with selection state.
-  useEffect(() => {
-    mapHandle.current?.setNbmLayer(layer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [variable, domain, product, forecastHour]);
-
-  // Fetch the forecast-hour layout whenever domain/product changes.
+  // ── Latest-run discovery (cycle + posted forecast hours) ─────────────────
   useEffect(() => {
     let cancelled = false;
-    async function loadLayout() {
+
+    async function loadRun() {
       try {
-        const data = await api.getLayout(domain, product);
+        const run = await api.getLatestRun(domain, product);
         if (cancelled) return;
-        setAvailableHours(data.hours);
-        setForecastHour((hour) => (data.hours.includes(hour) ? hour : data.hours[0] ?? hour));
+        if (run && run.date && run.cycle !== undefined) {
+          setCycle(`${run.date}${String(run.cycle).padStart(2, '0')}`);
+          const hours = run.available_forecast_hours ?? [];
+          if (hours.length > 0) {
+            setAvailableHours(hours);
+            setForecastHour((hour) => (hours.includes(hour) ? hour : hours[0] ?? hour));
+          } else {
+            setAvailableHours(defaultForecastHours());
+          }
+        }
       } catch {
-        if (!cancelled) setAvailableHours(defaultHours());
+        // Backend unreachable — keep the client-computed cycle as best effort.
+        if (!cancelled) setCycle(computeFallbackCycle());
       }
     }
-    void loadLayout();
+
+    void loadRun();
+    const timer = setInterval(() => void loadRun(), RUN_REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, [domain, product]);
 
-  const handleDomainChange = useCallback(
-    (next: NbmDomain) => {
-      setDomain(next);
-      const domainInfo = DOMAINS.find((d) => d.code === next);
-      if (domainInfo) {
-        // Re-center the camera on the new domain's approximate extent.
-        const [minLon, minLat, maxLon, maxLat] = domainBbox(next);
-        const center: [number, number] = [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
-        const zoom = next === 'oc' ? 2 : 5;
-        mapHandle.current?.flyTo(center, zoom);
-      }
-    },
-    [],
-  );
+  const handleToggle = useCallback((key: keyof OverlayToggles) => {
+    setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
+  const handleCwaaAvailable = useCallback((available: boolean) => {
+    setCwaaAvailable(available);
+  }, []);
 
   return (
     <div className="relative h-full w-full">
-      <MapView ref={mapHandle} initialLayer={layer} className="absolute inset-0" />
+      <MapContainer domain={domain} className="absolute inset-0">
+        {/* Weather raster (below) and vector overlays (above) attach here. */}
+        <WeatherRasterLayer
+          domain={domain}
+          cycle={cycle}
+          element={variable}
+          fhour={forecastHour}
+          opacity={opacity}
+        />
+        <VectorOverlays toggles={toggles} onCwaaAvailable={handleCwaaAvailable} />
+        <ProbeReadout domain={domain} cycle={cycle} fhour={forecastHour} element={variable} />
+      </MapContainer>
 
-      {/* Overlay chrome — pointer-events are scoped so map panning still works. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col gap-3 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <Toolbar
-            variable={variable}
-            domain={domain}
-            product={product}
-            forecastHour={forecastHour}
-            availableHours={availableHours}
-            onVariableChange={setVariable}
-            onDomainChange={handleDomainChange}
-            onProductChange={setProduct}
-            onForecastHourChange={setForecastHour}
-          />
-          <StatusBadge />
-        </div>
+      {/* Overlay chrome — pointer-events scoped so map panning still works. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between gap-3 p-4 pr-12">
+        <Toolbar
+          variable={variable}
+          domain={domain}
+          product={product}
+          forecastHour={forecastHour}
+          availableHours={availableHours}
+          cycle={cycle}
+          onVariableChange={setVariable}
+          onDomainChange={setDomain}
+          onProductChange={setProduct}
+          onForecastHourChange={setForecastHour}
+        />
+        <StatusBadge />
       </div>
 
-      <div className="pointer-events-none absolute bottom-6 right-4">
+      <div className="pointer-events-none absolute bottom-14 left-4 z-30">
+        <OverlayControls
+          opacity={opacity}
+          onOpacityChange={setOpacity}
+          toggles={toggles}
+          onToggle={handleToggle}
+          cwaaAvailable={cwaaAvailable}
+        />
+      </div>
+
+      <div className="pointer-events-none absolute bottom-10 right-4 z-30">
         <Legend variable={variable} />
       </div>
     </div>
   );
-}
-
-function defaultHours(): number[] {
-  return [1, 6, 12, 18, 24, 36, 48, 72, 96, 120, 144, 168];
-}
-
-function domainBbox(domain: NbmDomain): [number, number, number, number] {
-  const table: Record<NbmDomain, [number, number, number, number]> = {
-    co: [-126, 20, -66, 50],
-    ak: [-180, 50, -125, 72],
-    hi: [-161, 18, -154, 23],
-    pr: [-69, 17, -64, 19],
-    gu: [140, 10, 150, 18],
-    oc: [-180, -80, 180, 80],
-  };
-  return table[domain];
 }
