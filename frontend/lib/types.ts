@@ -72,3 +72,59 @@ export interface LayoutResponse {
   maxForecastHour: number;
   isStaticApproximation: boolean;
 }
+
+/** A published NBM cycle (``GET /runs/latest``). */
+export interface LatestRunInfo {
+  date: string; // YYYYMMDD (UTC)
+  cycle: number; // 0-23 (UTC hour)
+  cycle_time?: string; // ISO-8601 UTC
+  domain: NbmDomain;
+  product: NbmProduct;
+  available_forecast_hours: number[];
+  f001_available?: boolean;
+}
+
+/** One element sampled by ``GET /probe/point``. */
+export interface ProbePointValue {
+  element: string;
+  name: string;
+  value: number | null;
+  units: string;
+  missing: boolean;
+  formatted?: string;
+  category?: string;
+  raw_grib?: number | null;
+}
+
+/** ``GET /probe/point`` response. */
+export interface ProbePointResponse {
+  lat: number;
+  lon: number;
+  domain: string;
+  cycle: string;
+  forecast_hour: number;
+  valid_time_utc: string;
+  method: string;
+  grid_index?: Record<string, unknown>;
+  values: Record<string, ProbePointValue>;
+  summary?: {
+    temperature?: string | null;
+    dewpoint?: string | null;
+    wind?: string | null;
+    wind_gust?: string | null;
+    qpf?: string | null;
+    sky_cover?: string | null;
+    units?: string;
+  };
+  timings_ms?: Record<string, number>;
+}
+
+/** Which optional vector overlays are visible. */
+export interface OverlayToggles {
+  states: boolean;
+  counties: boolean;
+  cwaa: boolean;
+  highways: boolean;
+  rivers: boolean;
+  hillshade: boolean;
+}

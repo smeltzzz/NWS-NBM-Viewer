@@ -9,8 +9,12 @@ Next.js 14 (App Router) + TypeScript + Tailwind CSS + MapLibre GL map viewer.
 | `app/layout.tsx`          | Root layout, metadata, `100vh`/`overflow:hidden` shell |
 | `app/page.tsx`            | Single map viewport                            |
 | `app/api/health/route.ts` | Frontend health route (Docker prod healthcheck) |
-| `components/map/`         | `MapShell`, `MapView`, `Toolbar`, `Legend`, `StatusBadge` |
-| `lib/`                    | `config`, `api`, `nbm`, `basemaps`, `types`, `format` |
+| `components/map/MapContainer.tsx`    | Map engine: full-screen MapLibre canvas, HiDPI, dark vector basemap, per-domain camera presets |
+| `components/map/WeatherRasterLayer.tsx` | Dynamic NBM WebP raster layer (`/api/v1/tiles/...`), opacity slider binding, flicker-free time scrubbing |
+| `components/map/VectorOverlays.tsx`  | State/county borders, NWS CWAA, highways, rivers, hillshade (toggleable) |
+| `components/map/ProbeReadout.tsx`    | Hover HUD: debounced `/api/v1/probe/point` readout near the cursor |
+| `components/map/`         | `MapShell` (state), `Toolbar`, `OverlayControls`, `Legend`, `StatusBadge`, `layerIds` |
+| `lib/`                    | `config`, `api`, `nbm` (domain viewports, tile URLs), `basemaps`, `types`, `format` |
 
 ## Run
 

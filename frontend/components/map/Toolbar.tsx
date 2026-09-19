@@ -7,6 +7,7 @@
 
 import type { NbmDomain, NbmProduct } from '@/lib/types';
 
+import { formatCycle } from '@/lib/format';
 import { DOMAINS, ELEMENTS, PRODUCTS } from '@/lib/nbm';
 
 interface ToolbarProps {
@@ -15,6 +16,8 @@ interface ToolbarProps {
   product: NbmProduct;
   forecastHour: number;
   availableHours: number[];
+  /** Active model cycle (YYYYMMDDHH) — displayed as a read-only chip. */
+  cycle?: string;
   onVariableChange: (variable: string) => void;
   onDomainChange: (domain: NbmDomain) => void;
   onProductChange: (product: NbmProduct) => void;
@@ -28,6 +31,7 @@ export function Toolbar(props: ToolbarProps) {
     product,
     forecastHour,
     availableHours,
+    cycle,
     onVariableChange,
     onDomainChange,
     onProductChange,
@@ -83,6 +87,16 @@ export function Toolbar(props: ToolbarProps) {
           ))}
         </select>
       </label>
+
+      {/* Active model cycle */}
+      {cycle ? (
+        <span
+          className="rounded-md border border-white/10 bg-white/5 px-2 py-1 font-mono text-[11px] text-white/55"
+          title="Active NBM model cycle (UTC)"
+        >
+          {formatCycle(cycle)}
+        </span>
+      ) : null}
 
       {/* Forecast hour */}
       <label className="flex flex-1 items-center gap-2 text-xs text-white/60">
