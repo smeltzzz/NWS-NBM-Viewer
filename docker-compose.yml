@@ -1,0 +1,142 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# NWS NBM Viewer — local development stack
+#
+#   docker compose up --build       # backend :8000, frontend :3000, redis :6379
+#
+# Hot reload:
+#   * backend  -> uvicorn --reload watching the bind-mounted ./backend
+#   * frontend -> next dev (HMR + Fast Refresh) over the bind-mounted ./frontend
+#
+# Source trees are bind-mounted; dependency trees live in the image and are
+# preserved by anonymous volumes so reloads never touch an installed tree.
+# ═════════════════════════════════════════════════════════════════════════════
+name: nws-nbm-viewer
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # FastAPI backend — NODD/GRIB access, rio-tiler tile rendering, caching
+  # ───────────────────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+      target: dev
+    image: nws-nbm-viewer-backend:dev
+    container_name: nbm-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PORT: "8000"
+      HOST: 0.0.0.0
+      API_PREFIX: ${API_PREFIX:-/api/v1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX:-^https?://([a-z0-9-]+\.)*(localhost|e2b\.app|arena\.ai|vercel\.app|pages\.dev)(:\d+)?$}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      S3_BUCKET_GRIB: ${S3_BUCKET_GRIB:-noaa-nbm-grib2-pds}
+      S3_BUCKET_COG: ${S3_BUCKET_COG:-noaa-nbm-pds}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_GRIB_KEY_TEMPLATE: ${S3_GRIB_KEY_TEMPLATE:-blend.{date}/{cycle}/{product}/blend.t{cycle}z.{product}.f{hour:03d}.{domain}.grib2}
+      S3_GRIB_KEY_TEMPLATE_FALLBACK: ${S3_GRIB_KEY_TEMPLATE_FALLBACK:-blend.{date}/{cycle}/grib2/blend.t{cycle}z.{product}.f{hour:03d}.{domain}.grib2}
+      COG_KEY_TEMPLATE: ${COG_KEY_TEMPLATE:-blendv4.2/{domain}/{date}/{cycle}/{variable}/{variable}.t{cycle}z.f{hour:03d}.{domain}.tif}
+      NOMADS_BASE_URL: ${NOMADS_BASE_URL:-https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod}
+      NOMADS_FALLBACK_ENABLED: ${NOMADS_FALLBACK_ENABLED:-true}
+      UPSTREAM_PROBE_ENABLED: ${UPSTREAM_PROBE_ENABLED:-true}
+      UPSTREAM_PROBE_TIMEOUT_SECONDS: ${UPSTREAM_PROBE_TIMEOUT_SECONDS:-2.5}
+      TILE_CACHE_DIR: /data/tilecache
+      CACHE_SIZE_LIMIT_GB: ${CACHE_SIZE_LIMIT_GB:-20}
+      CACHE_BACKEND: ${CACHE_BACKEND:-disk}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-false}
+      NBM_DEFAULT_DOMAIN: ${NBM_DEFAULT_DOMAIN:-co}
+      NBM_DEFAULT_PRODUCT: ${NBM_DEFAULT_PRODUCT:-core}
+      NBM_DEFAULT_VARIABLE: ${NBM_DEFAULT_VARIABLE:-tmp}
+      NBM_DEFAULT_FORECAST_HOUR: ${NBM_DEFAULT_FORECAST_HOUR:-24}
+    volumes:
+      # Hot reload: source is bind-mounted over the image's copy.
+      - ./backend:/app
+      # Named volume for the tile/disk cache — survives container rebuilds and
+      # keeps multi-GB raster caches off the bind mount.
+      - tile-cache:/data/tilecache
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3).status == 200 else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - nbm-net
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Next.js frontend — MapLibre GL viewer with Next.js rewrite proxy to API
+  # ───────────────────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+      target: dev
+    image: nws-nbm-viewer-frontend:dev
+    container_name: nbm-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: development
+      # Server-side proxy target for /api/v1/* rewrites (container DNS name).
+      API_PROXY_TARGET: http://backend:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+      NEXT_PUBLIC_MAP_CENTER_LON: ${NEXT_PUBLIC_MAP_CENTER_LON:--97.5}
+      NEXT_PUBLIC_MAP_CENTER_LAT: ${NEXT_PUBLIC_MAP_CENTER_LAT:-38.5}
+      NEXT_PUBLIC_MAP_DEFAULT_ZOOM: ${NEXT_PUBLIC_MAP_DEFAULT_ZOOM:-4}
+      NEXT_PUBLIC_BASEMAP: ${NEXT_PUBLIC_BASEMAP:-dark}
+      # Reliable file-watching across Docker Desktop bind mounts.
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./frontend:/app
+      # Anonymous volumes: keep image-built dependency + build trees intact.
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - nbm-net
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Redis — optional shared cache (CACHE_BACKEND=redis) and rate-limit store
+  # ───────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: nbm-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - nbm-net
+
+volumes:
+  tile-cache:
+    driver: local
+
+networks:
+  nbm-net:
+    driver: bridge

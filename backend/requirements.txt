@@ -1,0 +1,66 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# NWS NBM Viewer — backend runtime dependencies
+#
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Geospatial wheels (rasterio, rio-tiler, pyproj, scipy) publish manylinux
+# wheels that BUNDLE GDAL/PROJ — no system GDAL or apt packages required.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── Web framework ───────────────────────────────────────────────────────────
+fastapi>=0.115.0,<0.200.0
+uvicorn[standard]>=0.32.0,<0.40.0
+python-multipart>=0.0.12
+pydantic>=2.9.0,<3.0.0
+pydantic-settings>=2.6.0,<3.0.0
+python-dotenv>=1.0.1
+
+# ── HTTP / upstream data access ─────────────────────────────────────────────
+httpx>=0.27.2,<0.30.0
+
+# ── AWS NODD (S3) access ────────────────────────────────────────────────────
+boto3>=1.35.0,<2.0.0
+botocore>=1.35.0,<2.0.0
+
+# ── Geospatial raster stack (wheels bundle GDAL/PROJ) ───────────────────────
+rasterio>=1.3.10,<2.0.0
+rio-tiler>=6.6.0,<8.0.0
+pyproj>=3.6.1,<4.0.0
+shapely>=2.0.6,<3.0.0
+morecantile>=5.4.2,<7.0.0
+
+# ── Numerics (percentile/quantile handling, colour ramps, smoothing) ────────
+numpy>=1.26.0,<3.0.0
+scipy>=1.13.0,<2.0.0
+
+# ── Caching & scheduling ────────────────────────────────────────────────────
+diskcache>=5.6.3,<6.0.0
+apscheduler>=3.10.4,<4.0.0
+redis>=5.1.0,<6.0.0
+
+# ── Observability ───────────────────────────────────────────────────────────
+structlog>=24.4.0,<26.0.0
+
+# ── Test suite ──────────────────────────────────────────────────────────────
+pytest>=8.3.0,<9.0.0
+pytest-asyncio>=0.24.0
+
+# ═════════════════════════════════════════════════════════════════════════════
+# OPTIONAL — GRIB2 decode layer (installed in the decode/ingest milestone)
+#
+# Uncomment when implementing the GRIB -> Zarr/COG materialisation pipeline.
+# These add ~120 MB and require the system `eccodes` C library + `libeccodes`
+# data files, so they are kept out of the default image on purpose.
+#
+#   apt-get install -y libeccodes-dev   # Debian/Ubuntu
+#   brew install eccodes                # macOS
+#
+# pygrib>=2.1.6
+# eccodes>=2.37.0
+# cfgrib>=0.9.14.1
+# xarray>=2024.9.0
+# pandas>=2.2.3
+# zarr>=2.18.3
+# numcodecs>=0.13.0
+# ═════════════════════════════════════════════════════════════════════════════

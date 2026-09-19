@@ -1,0 +1,41 @@
+# ── Build context exclusions for the backend image ───────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Never ship caches, rasters or GRIB data into an image
+data/
+cache/
+tiles/
+rasters/
+tmp/
+*.idx
+*.grib2
+*.grb*
+*.tif
+*.tiff
+*.cog
+*.nc
+*.zarr/
+logs/
+*.log
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.git/
+.gitignore
+.DS_Store
+.idea/
+.vscode/

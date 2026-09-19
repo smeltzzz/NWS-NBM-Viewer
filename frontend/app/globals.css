@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Map-centric full-viewport shell ───────────────────────────────────────
+   The whole app is a single fixed viewport; all UI floats above the map.
+   `overscroll-behavior` stops scroll-chaining breaking the map interaction.  */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background-color: hsl(215 28% 8%);
+  color: #f8fafc;
+  -webkit-font-smoothing: antialiased;
+}
+
+#__next {
+  height: 100%;
+}
+
+/* Keep the map canvas crisp on hidpi and correctly ordered under overlays. */
+.maplibregl-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+}
