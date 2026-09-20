@@ -57,7 +57,7 @@ COPY --from=brotli-build /build/nginx-*/objs/ngx_http_brotli_filter_module.so /u
 RUN mkdir -p /etc/nginx/modules-enabled /var/cache/nginx/tiles /var/cache/nginx/api \
     && printf 'load_module /usr/lib/nginx/modules/ngx_http_brotli_filter_module.so;\n' \
         > /etc/nginx/modules-enabled/60-brotli.conf \
-    && printf 'brotli on;\nbrotli_comp_level 5;\nbrotli_min_length 1024;\nbrotli_proxied any;\nbrotli_buffers 16 8k;\nbrotli_types application/json application/geo+json application/manifest+json application/javascript text/css text/plain text/xml image/svg+xml;\n' \
+    && printf 'brotli on;\nbrotli_comp_level 5;\nbrotli_min_length 1024;\nbrotli_buffers 16 8k;\nbrotli_types application/json application/geo+json application/manifest+json application/javascript text/css text/plain text/xml image/svg+xml;\n' \
         > /etc/nginx/conf.d/brotli.conf \
     && rm -f /etc/nginx/conf.d/default.conf
 

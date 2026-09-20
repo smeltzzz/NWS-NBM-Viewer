@@ -110,7 +110,7 @@ jobs:
             # Annotations are size-capped — show the first real error with
             # context, then the build's dying lines.
             {
-              grep -B2 -A8 -m1 -E "error:|Error [0-9]+|CMake Error|undefined reference|cannot find|No such file" /tmp/build.log || true
+              grep -B2 -A8 -m1 -E "error:|Error [0-9]+|CMake Error|undefined reference|cannot find|No such file|emerg|unknown directive" /tmp/build.log || true
               echo '--- tail ---'
               tail -12 /tmp/build.log
             } | tr -d '\r' | sed 's|%|%25|g; s|:|%3A|g' | paste -sd '%0A' - | { read -r ERR || true; echo "::error::${ERR:0:3500}" || true; }
