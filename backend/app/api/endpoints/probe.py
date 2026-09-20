@@ -222,6 +222,74 @@ async def probe_meteogram(
     return payload
 
 
+# ── Wind vector field (particle / barb overlays) ─────────────────────────────
+@router.get(
+    "/wind-field",
+    summary="10 m wind U/V vector grid over a lon/lat viewport",
+    response_description="Row-major U and V arrays sampled on a caller-sized lattice",
+)
+async def probe_wind_field(
+    response: Response,
+    domain: str = Query("co", description="NBM domain: co, ak, hi, pr, gu, oc"),
+    cycle: str = Query(..., description="Model run as YYYYMMDDHH"),
+    fhour: int = Query(24, description="Forecast hour (0–264)"),
+    min_lon: float = Query(..., description="Viewport west edge (degrees)"),
+    min_lat: float = Query(..., description="Viewport south edge (degrees)"),
+    max_lon: float = Query(..., description="Viewport east edge (degrees)"),
+    max_lat: float = Query(..., description="Viewport north edge (degrees)"),
+    cols: int = Query(128, ge=8, le=256, description="Lattice width"),
+    rows: int = Query(80, ge=8, le=256, description="Lattice height"),
+    units: UnitsSystem = Query("imperial", description="Display unit system"),
+) -> dict:
+    """Return the zonal/meridional wind components over a map viewport.
+
+    Frontend animated wind-particle and wind-barb layers interpolate these
+    raw vector fields in the browser (Canvas/WebGL); the tile endpoint's
+    coloured raster cannot be inverted back into usable vector values.
+    Row 0 of each array is the northern edge of the bbox; missing cells are
+    ``null``.
+    """
+    started = time.perf_counter()
+    domain_code = _validate_domain(domain)
+    try:
+        cycle_id = parse_cycle(cycle)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    forecast_hour = _parse_fhour(fhour)
+
+    service = get_probe_service()
+    try:
+        result = await service.probe_wind_field(
+            domain=domain_code,
+            cycle=cycle_id,
+            fhour=forecast_hour,
+            min_lon=min_lon,
+            min_lat=min_lat,
+            max_lon=max_lon,
+            max_lat=max_lat,
+            cols=cols,
+            rows=rows,
+            units=units,
+        )
+    except OutOfDomainError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.exception("probe/wind-field failed for %s/%s f%03d", domain_code, cycle_id, forecast_hour)
+        raise HTTPException(status_code=503, detail=f"wind-field failed: {exc}") from exc
+
+    elapsed = (time.perf_counter() - started) * 1000.0
+    result["timings_ms"]["endpoint"] = round(elapsed, 2)
+    response.headers["X-Probe-Ms"] = f"{elapsed:.2f}"
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return result
+
+
 # ── Service metadata ──────────────────────────────────────────────────────────
 @router.get("/capabilities", summary="Describe the point-probe service")
 async def probe_capabilities() -> dict:

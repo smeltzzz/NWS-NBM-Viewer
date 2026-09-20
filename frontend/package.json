@@ -2,17 +2,19 @@
   "name": "frontend",
   "version": "0.1.0",
   "private": true,
-  "description": "NWS NBM Viewer \u2014 MapLibre GL frontend (Next.js 14 App Router)",
+  "description": "NWS NBM Viewer — MapLibre GL frontend (Next.js 14 App Router)",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "verify:timeline": "node scripts/verify-timeline-leaks.mjs"
+    "verify:timeline": "node scripts/verify-timeline-leaks.mjs",
+    "verify:visual": "node scripts/verify-visual-unmounts.mjs"
   },
   "dependencies": {
     "@turf/bbox": "^7.1.0",
+    "chart.js": "^4.5.1",
     "maplibre-gl": "^4.7.1",
     "next": "^14.2.15",
     "react": "^18.3.1",

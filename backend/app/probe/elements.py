@@ -42,6 +42,8 @@ _VARIABLE_UNITS: dict[str, tuple[UnitKind, str]] = {
     "ICEACCR": ("length", "mm"),
     "WIND": ("speed", "m/s"),
     "GUST": ("speed", "m/s"),
+    "UU": ("speed", "m/s"),
+    "VV": ("speed", "m/s"),
     "TRANSPWIND": ("speed", "m/s"),
     "WDIR": ("direction", "degree"),
     "RH": ("percent", "%"),
@@ -217,6 +219,7 @@ METEOGRAM_SERIES: dict[str, object] = {
     "wind_direction": "wdir",
     "wind_gust": "gust",
     "sky_cover": "sky",
+    "ceiling_height": "cig",
     "precip_type": "ptype",
     "pop": "pop01",
 }

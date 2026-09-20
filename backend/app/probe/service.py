@@ -21,6 +21,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+import numpy as np
+import pyproj
+from rasterio.crs import CRS
+
 from app.config import settings
 from app.core.catalog import DOMAIN_CATALOG, ELEMENT_CATALOG
 from app.logging_config import get_logger
@@ -106,6 +110,101 @@ def valid_time_utc(cycle: str, fhour: int) -> datetime:
     """Cycle init time + forecast hour → aware UTC datetime."""
     init = datetime.strptime(cycle, "%Y%m%d%H").replace(tzinfo=timezone.utc)
     return init + timedelta(hours=int(fhour))
+
+
+# ── Batch bilinear sampling for the wind vector field ────────────────────────
+def _interpolate_wind_grid(
+    grid,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    cols: int,
+    rows: int,
+) -> list[float | None]:
+    """Bilinearly sample one wind component grid onto a lon/lat lattice.
+
+    Returns ``rows × cols`` values, row-major, **row 0 = northern edge**.
+    Points outside the grid (or whose four surrounding cells are all
+    missing) yield ``None``.
+    """
+    values = np.asarray(grid.values, dtype=np.float64)
+    height, width = values.shape
+    nodata = getattr(grid, "nodata", None)
+
+    # Equirectangular sampling lattice over the viewport (row 0 = north).
+    lons = np.linspace(min_lon, max_lon, cols, dtype=np.float64)
+    lats = np.linspace(max_lat, min_lat, rows, dtype=np.float64)
+    lon_grid, lat_grid = np.meshgrid(lons, lats)  # (rows, cols)
+
+    # Build the transformer inside the worker thread: the pyproj object is
+    # then used by exactly one thread for the lifetime of this call.
+    transformer = pyproj.Transformer.from_crs(
+        CRS.from_epsg(4326), grid.crs, always_xy=True
+    )
+    xs, ys = transformer.transform(lon_grid.ravel(), lat_grid.ravel())
+
+    # Fractional row/col via the inverse affine (same algebra as GridSampler).
+    a, b, c = grid.transform.a, grid.transform.b, grid.transform.c
+    d, e, f = grid.transform.d, grid.transform.e, grid.transform.f
+    det = a * e - b * d
+    if abs(det) < 1e-18:
+        raise ValueError("degenerate geotransform; cannot invert")
+    xs = xs.ravel()
+    ys = ys.ravel()
+    col_f = (e * (xs - c) - b * (ys - f)) / det
+    row_f = (-d * (xs - c) + a * (ys - f)) / det
+
+    valid = np.isfinite(values)
+    if nodata is not None and math.isfinite(float(nodata)):
+        valid &= values != float(nodata)
+    zeroed = np.where(valid, values, 0.0)
+
+    r0 = np.clip(np.floor(row_f).astype(np.int64), 0, height - 1)
+    c0 = np.clip(np.floor(col_f).astype(np.int64), 0, width - 1)
+    # Keep the second corner in-bounds without disturbing the weights:
+    # (any point outside the grid is masked as nodata below).
+    r1 = np.clip(r0 + 1, 0, height - 1)
+    c1 = np.clip(c0 + 1, 0, width - 1)
+    dr = np.clip(row_f - r0, 0.0, 1.0)
+    dc = np.clip(col_f - c0, 0.0, 1.0)
+
+    accum = np.zeros_like(row_f)
+    weight = np.zeros_like(row_f)
+    corners = (
+        (r0, c0, (1.0 - dr) * (1.0 - dc)),
+        (r0, c1, (1.0 - dr) * dc),
+        (r1, c0, dr * (1.0 - dc)),
+        (r1, c1, dr * dc),
+    )
+    for rr, cc, wgt in corners:
+        mask = valid[rr, cc]
+        if not mask.any():
+            continue
+        accum += np.where(mask, zeroed[rr, cc] * wgt, 0.0)
+        weight += np.where(mask, wgt, 0.0)
+
+    inside = (row_f >= 0.0) & (row_f < height) & (col_f >= 0.0) & (col_f < width)
+    ok = inside & (weight > 1e-12)
+    result = np.where(ok, accum / np.where(ok, weight, 1.0), np.nan)
+    flat = result.ravel()
+    return [None if not math.isfinite(v) else float(v) for v in flat]
+
+
+def _interpolate_wind_pair(
+    u_grid,
+    v_grid,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    cols: int,
+    rows: int,
+) -> tuple[list[float | None], list[float | None]]:
+    """Interpolate both wind components in one pass (thread-pool worker)."""
+    u_flat = _interpolate_wind_grid(u_grid, min_lon, min_lat, max_lon, max_lat, cols, rows)
+    v_flat = _interpolate_wind_grid(v_grid, min_lon, min_lat, max_lon, max_lat, cols, rows)
+    return u_flat, v_flat
 
 
 # ── Unit conversion helpers ───────────────────────────────────────────────────
@@ -240,6 +339,7 @@ class MeteogramPoint:
     wind_direction: float | None = None
     wind_gust: float | None = None
     sky_cover: float | None = None
+    ceiling_height: float | None = None
     precip_type: int | None = None
     precip_type_label: str | None = None
     pop: float | None = None
@@ -269,6 +369,7 @@ class MeteogramPoint:
             "wind_direction": self.wind_direction,
             "wind_gust": self.wind_gust,
             "sky_cover": self.sky_cover,
+            "ceiling_height": self.ceiling_height,
             "precip_type": self.precip_type,
             "precip_type_label": self.precip_type_label,
             "pop": self.pop,
@@ -570,6 +671,97 @@ class ProbeService:
             timings_ms={"fetch_sample": round(fetch_ms, 2), "total": round(total_ms, 2)},
             missing_count=missing,
         )
+
+    # -- wind vector field (particle / barb layers) --------------------------
+    async def probe_wind_field(
+        self,
+        *,
+        domain: str,
+        cycle: str,
+        fhour: int,
+        min_lon: float,
+        min_lat: float,
+        max_lon: float,
+        max_lat: float,
+        cols: int = 128,
+        rows: int = 80,
+        units: UnitsSystem = "imperial",
+    ) -> dict[str, Any]:
+        """Sample the 10 m wind **U/V vector field** over a lon/lat viewport.
+
+        The animated wind-particle and wind-barb overlays need raw vector
+        components (not a coloured raster), so this endpoint bilinearly
+        interpolates the ``u10`` / ``v10`` grids onto a caller-sized
+        equirectangular lon/lat lattice.  Row 0 of the returned arrays is the
+        *northern* edge of the bbox (image convention), values are row-major
+        and missing cells are ``None``.
+        """
+        started = time.perf_counter()
+        domain = domain.strip().lower()
+        if domain not in DOMAIN_CATALOG:
+            raise KeyError(f"unknown NBM domain {domain!r}")
+        cycle_id = parse_cycle(cycle)
+        if not 0 <= fhour <= settings.nbm_max_forecast_hour:
+            raise ValueError(
+                f"fhour {fhour} outside [0, {settings.nbm_max_forecast_hour}]"
+            )
+        if not (-180.0 <= min_lon < max_lon <= 180.0):
+            raise ValueError("bbox longitude requires -180 <= min_lon < max_lon <= 180")
+        if not (-90.0 <= min_lat < max_lat <= 90.0):
+            raise ValueError("bbox latitude requires -90 <= min_lat < max_lat <= 90")
+        cols = min(max(int(cols), 8), 256)
+        rows = min(max(int(rows), 8), 256)
+
+        u_grid, v_grid = await asyncio.gather(
+            self._load_grid(domain, cycle_id, "u10", fhour),
+            self._load_grid(domain, cycle_id, "v10", fhour),
+        )
+        if u_grid is None or v_grid is None:
+            raise LookupError("wind component grid unavailable")
+
+        # Bilinear interpolation + unit conversion are pure CPU work; keep
+        # them off the event loop (same pattern as GRIB decode).
+        u_flat, v_flat = await asyncio.to_thread(
+            _interpolate_wind_pair,
+            u_grid,
+            v_grid,
+            min_lon,
+            min_lat,
+            max_lon,
+            max_lat,
+            cols,
+            rows,
+        )
+
+        # Display units: knots (imperial) or m/s (metric), rounded for JSON.
+        if units == "metric":
+            factor = 1.0
+            unit_label = "m/s"
+        else:
+            factor = 1.0 / _MS_PER_KT
+            unit_label = "kt"
+        u_out = [None if u is None else round(u * factor, 2) for u in u_flat]
+        v_out = [None if v is None else round(v * factor, 2) for v in v_flat]
+
+        return {
+            "domain": domain,
+            "cycle": cycle_id,
+            "fhour": fhour,
+            "bbox": [
+                round(min_lon, 5),
+                round(min_lat, 5),
+                round(max_lon, 5),
+                round(max_lat, 5),
+            ],
+            "cols": cols,
+            "rows": rows,
+            "units": unit_label,
+            "u": u_out,
+            "v": v_out,
+            "timings_ms": {
+                "total": round((time.perf_counter() - started) * 1000.0, 2),
+            },
+        }
 
     # -- internals ----------------------------------------------------------
     def _validate_domain_point(self, domain: str, lat: float, lon: float) -> None:

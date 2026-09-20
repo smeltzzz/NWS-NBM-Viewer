@@ -128,3 +128,66 @@ export interface OverlayToggles {
   rivers: boolean;
   hillshade: boolean;
 }
+
+/** How the wind quantity is displayed on the map. */
+export type WindDisplayMode = 'grid' | 'particles' | 'barbs';
+
+// ── Station meteogram (GET /probe/meteogram) ─────────────────────────────────
+
+/** One forecast-hour point of a station meteogram (values in display units). */
+export interface MeteogramPoint {
+  forecast_hour: number;
+  valid_time_utc: string;
+  temperature: number | null;
+  dewpoint: number | null;
+  max_temperature: number | null;
+  min_temperature: number | null;
+  qpf: number | null;
+  qpf_percentiles: { p10: number | null; p50: number | null; p90: number | null };
+  snow: number | null;
+  snow_percentiles: { p10: number | null; p50: number | null; p90: number | null };
+  ice: number | null;
+  wind_speed: number | null;
+  wind_direction: number | null;
+  wind_gust: number | null;
+  sky_cover: number | null;
+  ceiling_height: number | null;
+  precip_type: number | null;
+  precip_type_label: string | null;
+  pop: number | null;
+}
+
+/** Full 10-day station meteogram payload. */
+export interface MeteogramResponse {
+  lat: number;
+  lon: number;
+  domain: string;
+  cycle: string;
+  start_fhour: number;
+  end_fhour: number;
+  forecast_hours: number[];
+  units: 'imperial' | 'metric';
+  unit_labels: Record<string, string>;
+  series: MeteogramPoint[];
+  grid_index?: Record<string, unknown>;
+  method: string;
+  point_count: number;
+  missing_count: number;
+  timings_ms?: Record<string, number>;
+}
+
+// ── Wind vector field (GET /probe/wind-field) ────────────────────────────────
+
+/** U/V wind vector grid over a viewport lattice (row-major, row 0 = north). */
+export interface WindFieldResponse {
+  domain: string;
+  cycle: string;
+  fhour: number;
+  bbox: [number, number, number, number]; // [minLon, minLat, maxLon, maxLat]
+  cols: number;
+  rows: number;
+  units: string; // "kt" or "m/s"
+  u: (number | null)[];
+  v: (number | null)[];
+  timings_ms?: Record<string, number>;
+}

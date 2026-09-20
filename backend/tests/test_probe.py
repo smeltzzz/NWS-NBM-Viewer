@@ -96,6 +96,11 @@ def _meteogram_url(**params) -> str:
     return f"{settings.api_prefix}/probe/meteogram?{qs}"
 
 
+def _wind_field_url(**params) -> str:
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    return f"{settings.api_prefix}/probe/wind-field?{qs}"
+
+
 # ── Forecast-hour cadence ─────────────────────────────────────────────────────
 
 
@@ -471,6 +476,7 @@ def test_meteogram_full_264h_structure(client: TestClient) -> None:
         "wind_direction",
         "wind_gust",
         "sky_cover",
+        "ceiling_height",
         "precip_type",
         "precip_type_label",
         "pop",
@@ -529,3 +535,194 @@ def test_probe_capabilities(client: TestClient) -> None:
     assert "tmp" in body["elements"]
     assert "wdir" in body["elements"]
     assert body["methods"] == ["bilinear", "nearest"]
+
+# ── Wind vector field (particle / barb overlays) ──────────────────────────────
+
+
+def test_u10_v10_are_probeable_elements() -> None:
+    """U/V wind components resolve through the probe element plan."""
+    u_plan = probe_element_plan("u10")
+    v_plan = probe_element_plan("v10")
+    assert u_plan.unit_kind == "speed"
+    assert v_plan.unit_kind == "speed"
+    assert u_plan.variable == "UU"
+    assert v_plan.variable == "VV"
+    assert u_plan.grib_unit == "m/s"
+
+
+def test_wind_field_structure(client: TestClient) -> None:
+    """A viewport wind field returns a row-major U/V lattice of the right shape."""
+    cols, rows = 32, 24
+    response = client.get(
+        _wind_field_url(
+            domain="co",
+            cycle=CYCLE,
+            fhour=12,
+            min_lon=DENVER["lon"] - 2.0,
+            min_lat=DENVER["lat"] - 1.0,
+            max_lon=DENVER["lon"] + 2.0,
+            max_lat=DENVER["lat"] + 1.0,
+            cols=cols,
+            rows=rows,
+            units="imperial",
+        )
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["cols"] == cols
+    assert body["rows"] == rows
+    assert body["fhour"] == 12
+    assert body["units"] == "kt"
+    assert len(body["u"]) == cols * rows
+    assert len(body["v"]) == cols * rows
+    assert body["bbox"] == [
+        round(DENVER["lon"] - 2.0, 5),
+        round(DENVER["lat"] - 1.0, 5),
+        round(DENVER["lon"] + 2.0, 5),
+        round(DENVER["lat"] + 1.0, 5),
+    ]
+
+    # Values are numeric (finite knots) inside a plausible range.
+    finite_u = [v for v in body["u"] if v is not None]
+    finite_v = [v for v in body["v"] if v is not None]
+    assert len(finite_u) > cols * rows * 0.9, "most lattice cells should be inside the domain"
+    assert len(finite_v) > cols * rows * 0.9
+    for v in finite_u + finite_v:
+        assert math.isfinite(v)
+        assert -60.0 <= v <= 60.0
+
+
+def test_wind_field_metric_units(client: TestClient) -> None:
+    """metric mode reports m/s and agrees with imperial within rounding."""
+    params = dict(
+        domain="co",
+        cycle=CYCLE,
+        fhour=12,
+        min_lon=DENVER["lon"] - 1.0,
+        min_lat=DENVER["lat"] - 0.5,
+        max_lon=DENVER["lon"] + 1.0,
+        max_lat=DENVER["lat"] + 0.5,
+        cols=16,
+        rows=12,
+    )
+    imperial = client.get(_wind_field_url(**params, units="imperial")).json()
+    metric = client.get(_wind_field_url(**params, units="metric")).json()
+
+    assert metric["units"] == "m/s"
+    assert imperial["units"] == "kt"
+    for uk, mk in zip(imperial["u"], metric["u"]):
+        if uk is None or mk is None:
+            assert uk is None and mk is None
+            continue
+        # kt = m/s / 0.5144…  so m/s = kt * 0.5144
+        assert mk == pytest.approx(uk * 0.5144444444444444, abs=0.02)
+
+
+def test_wind_field_matches_probe_point(client: TestClient) -> None:
+    """U/V from the field agree with the point-probe U/V at the same location."""
+    # Coarse lattice centred on Denver so the centre cell sits on the click.
+    cols = rows = 21
+    response = client.get(
+        _wind_field_url(
+            domain="co",
+            cycle=CYCLE,
+            fhour=12,
+            min_lon=DENVER["lon"] - 1.0,
+            min_lat=DENVER["lat"] - 1.0,
+            max_lon=DENVER["lon"] + 1.0,
+            max_lat=DENVER["lat"] + 1.0,
+            cols=cols,
+            rows=rows,
+            units="metric",
+        )
+    )
+    assert response.status_code == 200
+    field = response.json()
+    center = (rows // 2) * cols + (cols // 2)
+    field_u = field["u"][center]
+    field_v = field["v"][center]
+    assert field_u is not None and field_v is not None
+
+    point = client.get(
+        _point_url(
+            lat=DENVER["lat"],
+            lon=DENVER["lon"],
+            domain="co",
+            cycle=CYCLE,
+            fhour=12,
+            elements="u10,v10",
+            units="metric",
+        )
+    )
+    assert point.status_code == 200
+    pbody = point.json()
+    probe_u = pbody["values"]["u10"]["value"]
+    probe_v = pbody["values"]["v10"]["value"]
+    assert probe_u is not None and probe_v is not None
+
+    # Bilinear field sample at the exact centre vs point probe: same grid,
+    # same interpolation — must agree to within the rounding difference
+    # (field: 2 dp, point probe: 1 dp for speeds).
+    assert field_u == pytest.approx(probe_u, abs=0.06)
+    assert field_v == pytest.approx(probe_v, abs=0.06)
+
+
+def test_wind_field_validation(client: TestClient) -> None:
+    # Inverted longitude box.
+    bad_lon = client.get(
+        _wind_field_url(
+            domain="co", cycle=CYCLE, fhour=12,
+            min_lon=-100.0, min_lat=39.0, max_lon=-110.0, max_lat=40.0,
+        )
+    )
+    assert bad_lon.status_code == 422
+
+    # Inverted latitude box.
+    bad_lat = client.get(
+        _wind_field_url(
+            domain="co", cycle=CYCLE, fhour=12,
+            min_lon=-110.0, min_lat=40.0, max_lon=-100.0, max_lat=39.0,
+        )
+    )
+    assert bad_lat.status_code == 422
+
+    # Unknown domain.
+    bad_domain = client.get(
+        _wind_field_url(
+            domain="xx", cycle=CYCLE, fhour=12,
+            min_lon=-110.0, min_lat=40.0, max_lon=-100.0, max_lat=41.0,
+        )
+    )
+    assert bad_domain.status_code == 404
+
+    # Bad cycle.
+    bad_cycle = client.get(
+        _wind_field_url(
+            domain="co", cycle="nope", fhour=12,
+            min_lon=-110.0, min_lat=40.0, max_lon=-100.0, max_lat=41.0,
+        )
+    )
+    assert bad_cycle.status_code == 422
+
+
+def test_wind_field_out_of_domain_bbox(client: TestClient) -> None:
+    """A bbox entirely outside the domain yields nulls (not an error)."""
+    response = client.get(
+        _wind_field_url(
+            domain="co",
+            cycle=CYCLE,
+            fhour=12,
+            min_lon=-10.0,
+            min_lat=10.0,
+            max_lon=-8.0,
+            max_lat=12.0,
+            cols=12,
+            rows=10,
+        )
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Whole box is off the CONUS grid → no finite values.
+    assert all(v is None for v in body["u"])
+    assert all(v is None for v in body["v"])

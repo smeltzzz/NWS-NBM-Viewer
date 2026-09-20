@@ -478,6 +478,8 @@ WIND = CategoryMetadata(
     elements=[
         _element("wind", "10m Wind Speed", "10 m wind speed", "core", _id("WIND", "10 m above ground"), _SPEED, variable="WIND", tags=["wind"]),
         _element("wdir", "10m Wind Direction", "10 m wind direction", "core", _id("WDIR", "10 m above ground"), _DIRECTION, variable="WDIR", tags=["wind"]),
+        _element("u10", "U Wind Component 10m", "Zonal (east–west) 10 m wind vector component", "core", _id("UU", "10 m above ground"), _SPEED, variable="UU", tags=["wind", "vector"]),
+        _element("v10", "V Wind Component 10m", "Meridional (north–south) 10 m wind vector component", "core", _id("VV", "10 m above ground"), _SPEED, variable="VV", tags=["wind", "vector"]),
         _element("gust", "Wind Gust", "10 m wind gust speed", "core", _id("GUST", "10 m above ground"), _SPEED, variable="GUST", tags=["wind"]),
         _percentile("wind_p10", "Wind speed 10th percentile", "WIND", 10, _SPEED, "10 m above ground", source="qmd"),
         _percentile("wind_p25", "Wind speed 25th percentile", "WIND", 25, _SPEED, "10 m above ground", source="qmd"),
