@@ -121,7 +121,10 @@ jobs:
       - name: Validate gateway boot (with stub upstreams)
         run: |
           # `-t` config check outside the build (cheap re-proof in CI).
-          docker run --rm --entrypoint nginx nbm-gateway:ci -t
+          # Upstream service names resolve via /etc/hosts stubs here.
+          docker run --rm --entrypoint nginx \
+            --add-host backend:127.0.0.1 --add-host frontend:127.0.0.1 \
+            nbm-gateway:ci -t
           CID=$(docker run -d \
             --add-host backend:127.0.0.1 --add-host frontend:127.0.0.1 \
             nbm-gateway:ci)

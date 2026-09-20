@@ -63,10 +63,16 @@ RUN mkdir -p /etc/nginx/modules-enabled /var/cache/nginx/tiles /var/cache/nginx/
 
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 
-# Fail the build loudly on a bad config.  The compose service names in the
-# `upstream` blocks resolve via Docker DNS at runtime; give the build-time
-# check stubs so `nginx -t` can resolve them.
-RUN echo "127.0.0.1 backend frontend" >> /etc/hosts && nginx -t
+# Fail the build loudly on a bad config.  /etc/hosts is read-only during
+# builds, so `nginx -t` runs against a sed copy of the config where the
+# compose service names are swapped for literal stubs — everything else
+# (syntax, cache paths, drop-ins, brotli module load) is checked verbatim.
+# At runtime the real config resolves `backend`/`frontend` via Docker DNS.
+RUN sed -e 's|server backend:8000;|server 127.0.0.1:1;|' \
+        -e 's|server frontend:3000;|server 127.0.0.1:2;|' \
+        /etc/nginx/nginx.conf > /etc/nginx/nginx.buildcheck.conf \
+    && nginx -t -c /etc/nginx/nginx.buildcheck.conf \
+    && rm /etc/nginx/nginx.buildcheck.conf
 
 EXPOSE 80
 
