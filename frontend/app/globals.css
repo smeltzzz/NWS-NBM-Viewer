@@ -139,3 +139,52 @@ input[type='range']::-moz-range-thumb {
     transform: translateX(420%);
   }
 }
+
+/* ── Station pin (meteogram marker) ────────────────────────────────────────
+   Dropped when the user clicks the map to open the station meteogram.
+   The element is created by `StationMarker` and managed through the
+   MapLibre Marker API; this only styles it. */
+.nbm-station-pin {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  cursor: grab;
+}
+.nbm-station-pin:active {
+  cursor: grabbing;
+}
+.nbm-station-pin__ring {
+  position: absolute;
+  inset: 2px;
+  border-radius: 9999px;
+  border: 2px solid hsl(199 89% 58%);
+  background: rgba(56, 189, 248, 0.22);
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.75);
+}
+.nbm-station-pin__dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 9999px;
+  background: #e0f2fe;
+}
+@keyframes station-pin-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+.nbm-station-pin__pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 1.5px solid rgba(56, 189, 248, 0.7);
+  animation: station-pin-pulse 1.6s ease-out infinite;
+}

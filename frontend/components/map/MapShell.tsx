@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '@/lib/api';
 import { computeFallbackCycle } from '@/lib/nbm';
-import type { NbmDomain, NbmProduct, OverlayToggles } from '@/lib/types';
+import type { NbmDomain, NbmProduct, OverlayToggles, WindDisplayMode } from '@/lib/types';
 import type { UnitSystem } from '@/lib/units';
 
 import { Header } from '@/components/layout/Header';
@@ -33,7 +33,17 @@ import { StatusBadge } from '@/components/map/StatusBadge';
 import { VectorOverlays } from '@/components/map/VectorOverlays';
 import { RASTER_DEFAULT_OPACITY, WeatherRasterLayer } from '@/components/map/WeatherRasterLayer';
 
+import { MeteogramModal } from '@/src/components/meteogram/MeteogramModal';
+import { WindParticleLayer, type WindLayerMode } from '@/src/components/map/WindParticleLayer';
+import { StationMarker } from '@/src/components/map/StationMarker';
+import { StationPicker, type StationPick } from '@/src/components/map/StationPicker';
+
 const RUN_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
+
+/** Elements rendered by the wind overlay modes (particles / barbs). */
+const WIND_FAMILY = new Set(['wind', 'wdir', 'gust']);
+
+const WIND_DISPLAY_STORAGE_KEY = 'nbm-wind-display';
 
 interface MapShellProps {
   initialVariable?: string;
@@ -87,6 +97,19 @@ export function MapShell({
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [hoveredValue, setHoveredValue] = useState<number | null>(null);
+
+  // ── Wind display mode (Standard Grid / Wind Particles / Wind Barbs) ──────
+  const [windDisplay, setWindDisplay] = useState<WindDisplayMode>(() => {
+    try {
+      const saved = localStorage.getItem(WIND_DISPLAY_STORAGE_KEY);
+      return saved === 'particles' || saved === 'barbs' ? saved : 'grid';
+    } catch {
+      return 'grid';
+    }
+  });
+
+  // ── Station meteogram (map click → pinpoint marker + drawer) ────────────
+  const [station, setStation] = useState<StationPick | null>(null);
 
   // Product catalog state
   const [selectedProductId, setSelectedProductId] = useState<string>(() => {
@@ -162,6 +185,27 @@ export function MapShell({
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(WIND_DISPLAY_STORAGE_KEY, windDisplay); } catch {}
+  }, [windDisplay]);
+
+  // ── Wind overlay derivation ───────────────────────────────────────────────
+  const windProductActive = WIND_FAMILY.has(variable);
+  const windOverlayActive = windProductActive && windDisplay !== 'grid';
+  const windLayerMode: WindLayerMode = windDisplay === 'barbs' ? 'barbs' : 'particles';
+
+  // ── Station pick (map click) / drag handlers ─────────────────────────────
+  const handleStationPick = useCallback((pick: StationPick) => {
+    setStation(pick);
+  }, []);
+
+  const handleStationDrag = useCallback((lat: number, lon: number) => {
+    // Keep the last known city label; the modal re-fetches on lat/lon change.
+    setStation((prev) => (prev ? { ...prev, lat, lon } : { lat, lon, city: null }));
+  }, []);
+
+  const closeMeteogram = useCallback(() => setStation(null), []);
 
   // ── Latest-run discovery ────────────────────────────────────────────────
   useEffect(() => {
@@ -314,14 +358,28 @@ export function MapShell({
               element={variable}
               fhour={forecastHour}
               opacity={opacity}
+              visible={!windOverlayActive}
             />
             <VectorOverlays toggles={toggles} onCwaaAvailable={handleCwaaAvailable} />
+            {/* Animated wind overlay: particles or barbs advected by the
+                10 m U/V vector field (hidden unless a wind product +
+                non-grid display mode is selected). */}
+            <WindParticleLayer
+              domain={domain}
+              cycle={cycle}
+              fhour={forecastHour}
+              mode={windLayerMode}
+              visible={windOverlayActive}
+            />
             <ProbeReadout
               domain={domain}
               cycle={cycle}
               fhour={forecastHour}
               element={variable}
             />
+            {/* Map click → station pin + meteogram drawer. */}
+            <StationPicker onPick={handleStationPick} />
+            <StationMarker station={station} onDragEnd={handleStationDrag} />
           </MapContainer>
 
           {/* Temporal navigation dock — scrub bar + transport controls */}
@@ -360,6 +418,9 @@ export function MapShell({
               toggles={toggles}
               onToggle={handleToggle}
               cwaaAvailable={cwaaAvailable}
+              windDisplay={windDisplay}
+              onWindDisplayChange={setWindDisplay}
+              windProductActive={windProductActive}
             />
           </div>
 
@@ -400,6 +461,20 @@ export function MapShell({
           </div>
         </div>
       </div>
+
+      {/* Station meteogram drawer — hover scrubs the map timeline. */}
+      {station && (
+        <MeteogramModal
+          lat={station.lat}
+          lon={station.lon}
+          domain={domain}
+          cycle={cycle}
+          units={unitSystem}
+          cityName={station.city}
+          onScrub={(hour) => timeline.seekHour(hour)}
+          onClose={closeMeteogram}
+        />
+      )}
     </div>
   );
 }

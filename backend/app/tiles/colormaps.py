@@ -335,6 +335,19 @@ _WIND_RGBA: Final[tuple[Rgba, ...]] = tuple(
     )
 )
 
+# ── Diverging wind vector component (U/V) ramp: blue (negative) -> white
+#    (calm) -> red (positive), symmetric about zero in knots. ─────────────────
+_WIND_COMPONENT_BREAKS: Final[tuple[float, ...]] = (
+    -40.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 40.0,
+)
+_WIND_COMPONENT_RGBA: Final[tuple[Rgba, ...]] = tuple(
+    _hex(c)
+    for c in (
+        "0d2d8f", "1f60c9", "5aa3e8", "9fd2f2", "f4f7f8",
+        "f5c2a1", "ef8a4c", "d94f1f", "8f140d",
+    )
+)
+
 # Gusts reuse the same ramp but extend the top of the range to 120 kt.
 _GUST_BREAKS: Final[tuple[float, ...]] = _WIND_BREAKS + (120.0,)
 _GUST_RGBA: Final[tuple[Rgba, ...]] = _WIND_RGBA + (_hex("2b0050"),)
@@ -468,6 +481,20 @@ def _build_registry() -> dict[str, Colormap]:
             colors=_GUST_RGBA,
             source="NWS operational surface wind scale (gust range)",
             above=(43, 0, 80, 255),
+            precision=0,
+        )
+    )
+    add(
+        Colormap(
+            name="wind_component",
+            label="Wind vector component (U/V)",
+            kind="linear",
+            unit_kind="speed",
+            breaks=_WIND_COMPONENT_BREAKS,
+            colors=_WIND_COMPONENT_RGBA,
+            source="Diverging zonal/meridional wind component scale",
+            below=(13, 45, 143, 255),
+            above=(143, 20, 13, 255),
             precision=0,
         )
     )
