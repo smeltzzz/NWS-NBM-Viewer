@@ -176,9 +176,7 @@ def element_fetch_meta(element: str) -> ElementFetchMeta:
     code = element.strip().lower()
     meta = ELEMENT_CATALOG.get(code)
     if meta is None:
-        raise KeyError(
-            f"{element!r} is not a known NBM element; see /api/v1/tiles/capabilities"
-        )
+        raise KeyError(f"{element!r} is not a known NBM element; see /api/v1/tiles/capabilities")
     try:
         plan = render_plan(code)
     except ElementNotRenderable:
@@ -223,9 +221,7 @@ class DomainGrid:
         """``(left, bottom, right, top)`` in the native CRS."""
         import rasterio.transform
 
-        return rasterio.transform.array_bounds(
-            self.height, self.width, self.transform
-        )
+        return rasterio.transform.array_bounds(self.height, self.width, self.transform)
 
 
 # Native projection per domain, taken from the catalog's own declaration.
@@ -237,8 +233,7 @@ class DomainGrid:
 _LCC_6372 = "+proj=lcc +lat_0=12 +lon_0=-102 +lat_1=17.5 +lat_2=29.5 \
 +x_0=2500000 +y_0=0 +ellps=GRS80 +units=m +no_defs"
 _POLAR_AK = (
-    "+proj=stere +lat_0=90 +lat_ts=60 +lon_0=-152 +x_0=0 +y_0=0 "
-    "+ellps=GRS80 +units=m +no_defs"
+    "+proj=stere +lat_0=90 +lat_ts=60 +lon_0=-152 +x_0=0 +y_0=0 " "+ellps=GRS80 +units=m +no_defs"
 )
 _MERCATOR = "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
 _LONLAT = "+proj=longlat +ellps=WGS84 +no_defs"
@@ -289,12 +284,8 @@ def domain_grid(code: str, *, downsample: int = 1) -> DomainGrid:
         height = max(1, int(np.ceil((north - south) / degrees)))
         transform = from_origin(west, north, degrees, degrees)
     else:
-        transformer = pyproj.Transformer.from_crs(
-            CRS.from_epsg(4326), crs, always_xy=True
-        )
-        xs, ys = transformer.transform(
-            [west, east, west, east], [south, south, north, north]
-        )
+        transformer = pyproj.Transformer.from_crs(CRS.from_epsg(4326), crs, always_xy=True)
+        xs, ys = transformer.transform([west, east, west, east], [south, south, north, north])
         x_min, x_max = min(xs), max(xs)
         y_min, y_max = min(ys), max(ys)
         width = max(1, int(np.ceil((x_max - x_min) / resolution)))
@@ -423,8 +414,7 @@ class LocalGribSource:
     async def message(self, request: GridRequest) -> bytes:
         meta = element_fetch_meta(request.element)
         candidate = (
-            self.directory
-            / f"blend.t{request.hour:02d}z.{meta.product}."
+            self.directory / f"blend.t{request.hour:02d}z.{meta.product}."
             f"f{request.fhour:03d}.{request.domain}.grib2"
         )
         if not candidate.is_file():
@@ -537,9 +527,7 @@ class SyntheticGribSource:
             self._cache[request.cache_key] = payload
         return payload
 
-    def _field_for(
-        self, request: GridRequest
-    ) -> tuple[np.ndarray, str, "DomainGrid"]:
+    def _field_for(self, request: GridRequest) -> tuple[np.ndarray, str, "DomainGrid"]:
         fetch = element_fetch_meta(request.element)
         dgrid = domain_grid(request.domain, downsample=self.downsample)
 
@@ -588,9 +576,7 @@ class SyntheticGribSource:
     ) -> np.ndarray:
         """A smooth, deterministic field with structure worth resampling."""
         height, width = grid.shape
-        seed = zlib.crc32(
-            f"{request.domain}|{request.element}|{request.fhour}".encode()
-        )
+        seed = zlib.crc32(f"{request.domain}|{request.element}|{request.fhour}".encode())
         rng = np.random.default_rng(seed)
         # Normalised coordinates in [0, 1]; row 0 is the northern edge.
         xs = np.linspace(0.0, 1.0, width, dtype=np.float32)
@@ -653,8 +639,7 @@ class _AutoSource:
         except (LookupError, OSError) as exc:
             if self._active is self._primary and not self._degraded:
                 log.warning(
-                    "S3 grid fetch failed (%s); serving %s/%s from the synthetic "
-                    "source instead",
+                    "S3 grid fetch failed (%s); serving %s/%s from the synthetic " "source instead",
                     exc,
                     request.domain,
                     request.element,

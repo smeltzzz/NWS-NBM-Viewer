@@ -1,0 +1,55 @@
+# NWS NBM Viewer — FastAPI backend on a bare Linux VPS.
+#
+# Install:
+#   sudo useradd --system --create-home --home-dir /var/lib/nbm-viewer --shell /usr/sbin/nologin nbm
+#   sudo mkdir -p /var/lib/nbm-viewer/cache && sudo chown -R nbm:nbm /var/lib/nbm-viewer
+#   sudo cp deploy/systemd/nbm-api.service /etc/systemd/system/
+#   sudo cp deploy/nbm-viewer.env.example /etc/nbm-viewer/nbm.env   # edit values!
+#   sudo systemctl daemon-reload && sudo systemctl enable --now nbm-api
+#
+# The API workers own the 24/7 job loop: whichever worker wins the poller
+# file-lock runs the NOAA cycle poll + tile warm-up + 72 h retention sweep,
+# so no separate poller unit is required (one exists at nbm-poller.service
+# for dedicated hosts).
+
+[Unit]
+Description=NWS NBM Viewer — FastAPI backend (tiles, runs, 24/7 poller)
+Documentation=https://github.com/smeltzzz/NWS-NBM-Viewer
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=nbm
+Group=nbm
+WorkingDirectory=/opt/nbm-viewer/backend
+EnvironmentFile=-/etc/nbm-viewer/nbm.env
+Environment=TILE_CACHE_DIR=/var/lib/nbm-viewer/cache
+Environment=SCHEDULER_ENABLED=true
+Environment=POLLER_ENABLED=true
+ExecStart=/opt/nbm-viewer/backend/.venv/bin/python -m uvicorn main:app \
+    --host 127.0.0.1 --port 8000 \
+    --workers ${WEB_CONCURRENCY} \
+    --backlog 2048 --limit-concurrency 1000 --timeout-keep-alive 75 \
+    --limit-max-requests 250000 --proxy-headers --no-access-log
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Hardening — the process only needs its install tree + the cache dir.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/nbm-viewer/cache
+MemoryMax=6G
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

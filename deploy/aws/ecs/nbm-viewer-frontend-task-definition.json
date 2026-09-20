@@ -1,0 +1,37 @@
+{
+  "family": "nbm-viewer-frontend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "frontend",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/nbm-viewer/frontend:prod",
+      "essential": true,
+      "portMappings": [{ "containerPort": 3000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "HOSTNAME", "value": "0.0.0.0" },
+        { "name": "API_PROXY_TARGET", "value": "http://nbm-viewer-backend:8000" }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 15
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/nbm-viewer",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "frontend"
+        }
+      }
+    }
+  ]
+}

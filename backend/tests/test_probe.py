@@ -33,7 +33,6 @@ from app.probe.service import (
 from app.tiles.grib import Grid
 from app.tiles.source import SyntheticGribSource, domain_grid, set_data_source
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 # Representative click locations across domains.
@@ -304,14 +303,24 @@ def test_point_probe_default_elements(client: TestClient) -> None:
 def test_point_probe_metric_units(client: TestClient) -> None:
     imperial = client.get(
         _point_url(
-            lat=DENVER["lat"], lon=DENVER["lon"], domain="co",
-            cycle=CYCLE, fhour=24, elements="tmp,wind", units="imperial",
+            lat=DENVER["lat"],
+            lon=DENVER["lon"],
+            domain="co",
+            cycle=CYCLE,
+            fhour=24,
+            elements="tmp,wind",
+            units="imperial",
         )
     ).json()
     metric = client.get(
         _point_url(
-            lat=DENVER["lat"], lon=DENVER["lon"], domain="co",
-            cycle=CYCLE, fhour=24, elements="tmp,wind", units="metric",
+            lat=DENVER["lat"],
+            lon=DENVER["lon"],
+            domain="co",
+            cycle=CYCLE,
+            fhour=24,
+            elements="tmp,wind",
+            units="metric",
         )
     ).json()
 
@@ -327,25 +336,25 @@ def test_point_probe_metric_units(client: TestClient) -> None:
 
 def test_point_probe_out_of_domain_rejected(client: TestClient) -> None:
     # Equator / prime meridian is far outside CONUS.
-    response = client.get(
-        _point_url(lat=0.0, lon=0.0, domain="co", cycle=CYCLE, fhour=24)
-    )
+    response = client.get(_point_url(lat=0.0, lon=0.0, domain="co", cycle=CYCLE, fhour=24))
     assert response.status_code == 422
     assert "outside" in response.json()["detail"].lower()
 
 
 def test_point_probe_unknown_domain(client: TestClient) -> None:
-    response = client.get(
-        _point_url(lat=40.0, lon=-105.0, domain="zz", cycle=CYCLE, fhour=24)
-    )
+    response = client.get(_point_url(lat=40.0, lon=-105.0, domain="zz", cycle=CYCLE, fhour=24))
     assert response.status_code == 404
 
 
 def test_point_probe_unknown_element(client: TestClient) -> None:
     response = client.get(
         _point_url(
-            lat=DENVER["lat"], lon=DENVER["lon"], domain="co",
-            cycle=CYCLE, fhour=24, elements="not_a_real_element",
+            lat=DENVER["lat"],
+            lon=DENVER["lon"],
+            domain="co",
+            cycle=CYCLE,
+            fhour=24,
+            elements="not_a_real_element",
         )
     )
     assert response.status_code == 404
@@ -354,8 +363,11 @@ def test_point_probe_unknown_element(client: TestClient) -> None:
 def test_point_probe_bad_cycle(client: TestClient) -> None:
     response = client.get(
         _point_url(
-            lat=DENVER["lat"], lon=DENVER["lon"], domain="co",
-            cycle="not-a-cycle", fhour=24,
+            lat=DENVER["lat"],
+            lon=DENVER["lon"],
+            domain="co",
+            cycle="not-a-cycle",
+            fhour=24,
         )
     )
     assert response.status_code == 422
@@ -364,8 +376,12 @@ def test_point_probe_bad_cycle(client: TestClient) -> None:
 def test_point_probe_all_elements(client: TestClient) -> None:
     response = client.get(
         _point_url(
-            lat=DENVER["lat"], lon=DENVER["lon"], domain="co",
-            cycle=CYCLE, fhour=6, elements="all",
+            lat=DENVER["lat"],
+            lon=DENVER["lon"],
+            domain="co",
+            cycle=CYCLE,
+            fhour=6,
+            elements="all",
         )
     )
     assert response.status_code == 200
@@ -505,17 +521,19 @@ def test_meteogram_full_264h_structure(client: TestClient) -> None:
 
 
 def test_meteogram_out_of_domain(client: TestClient) -> None:
-    response = client.get(
-        _meteogram_url(lat=0.0, lon=0.0, domain="co", cycle=CYCLE)
-    )
+    response = client.get(_meteogram_url(lat=0.0, lon=0.0, domain="co", cycle=CYCLE))
     assert response.status_code == 422
 
 
 def test_meteogram_bad_window(client: TestClient) -> None:
     response = client.get(
         _meteogram_url(
-            lat=DENVER["lat"], lon=DENVER["lon"], domain="co",
-            cycle=CYCLE, start_fhour=100, end_fhour=10,
+            lat=DENVER["lat"],
+            lon=DENVER["lon"],
+            domain="co",
+            cycle=CYCLE,
+            start_fhour=100,
+            end_fhour=10,
         )
     )
     assert response.status_code == 422
@@ -535,6 +553,7 @@ def test_probe_capabilities(client: TestClient) -> None:
     assert "tmp" in body["elements"]
     assert "wdir" in body["elements"]
     assert body["methods"] == ["bilinear", "nearest"]
+
 
 # ── Wind vector field (particle / barb overlays) ──────────────────────────────
 
@@ -672,8 +691,13 @@ def test_wind_field_validation(client: TestClient) -> None:
     # Inverted longitude box.
     bad_lon = client.get(
         _wind_field_url(
-            domain="co", cycle=CYCLE, fhour=12,
-            min_lon=-100.0, min_lat=39.0, max_lon=-110.0, max_lat=40.0,
+            domain="co",
+            cycle=CYCLE,
+            fhour=12,
+            min_lon=-100.0,
+            min_lat=39.0,
+            max_lon=-110.0,
+            max_lat=40.0,
         )
     )
     assert bad_lon.status_code == 422
@@ -681,8 +705,13 @@ def test_wind_field_validation(client: TestClient) -> None:
     # Inverted latitude box.
     bad_lat = client.get(
         _wind_field_url(
-            domain="co", cycle=CYCLE, fhour=12,
-            min_lon=-110.0, min_lat=40.0, max_lon=-100.0, max_lat=39.0,
+            domain="co",
+            cycle=CYCLE,
+            fhour=12,
+            min_lon=-110.0,
+            min_lat=40.0,
+            max_lon=-100.0,
+            max_lat=39.0,
         )
     )
     assert bad_lat.status_code == 422
@@ -690,8 +719,13 @@ def test_wind_field_validation(client: TestClient) -> None:
     # Unknown domain.
     bad_domain = client.get(
         _wind_field_url(
-            domain="xx", cycle=CYCLE, fhour=12,
-            min_lon=-110.0, min_lat=40.0, max_lon=-100.0, max_lat=41.0,
+            domain="xx",
+            cycle=CYCLE,
+            fhour=12,
+            min_lon=-110.0,
+            min_lat=40.0,
+            max_lon=-100.0,
+            max_lat=41.0,
         )
     )
     assert bad_domain.status_code == 404
@@ -699,8 +733,13 @@ def test_wind_field_validation(client: TestClient) -> None:
     # Bad cycle.
     bad_cycle = client.get(
         _wind_field_url(
-            domain="co", cycle="nope", fhour=12,
-            min_lon=-110.0, min_lat=40.0, max_lon=-100.0, max_lat=41.0,
+            domain="co",
+            cycle="nope",
+            fhour=12,
+            min_lon=-110.0,
+            min_lat=40.0,
+            max_lon=-100.0,
+            max_lat=41.0,
         )
     )
     assert bad_cycle.status_code == 422

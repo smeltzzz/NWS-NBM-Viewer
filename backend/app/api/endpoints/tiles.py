@@ -24,6 +24,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Path, Query, Response
 
 from app.config import settings
+from app.core.s3_client import S3Throttled
 from app.logging_config import get_logger
 from app.tiles import colormaps
 from app.tiles.cache import (
@@ -60,16 +61,12 @@ def _parse_cycle(value: str) -> str:
     """``YYYYMMDDHH`` (``YYYY-MM-DD-HH`` also accepted)."""
     text = value.strip().replace("-", "").replace(":", "").replace("T", "")
     if len(text) not in (8, 10) or not text.isdigit():
-        raise HTTPException(
-            status_code=422, detail=f"cycle must be YYYYMMDDHH, got {value!r}"
-        )
+        raise HTTPException(status_code=422, detail=f"cycle must be YYYYMMDDHH, got {value!r}")
     if len(text) == 8:
         text += "00"
     hour = int(text[8:10])
     if hour > 23:
-        raise HTTPException(
-            status_code=422, detail=f"cycle hour must be 00-23, got {hour:02d}"
-        )
+        raise HTTPException(status_code=422, detail=f"cycle hour must be 00-23, got {hour:02d}")
     return text
 
 
@@ -77,9 +74,7 @@ def _parse_fhour(value: str) -> int:
     """``24`` or ``f024``."""
     text = value.strip().lower().lstrip("f")
     if not text.isdigit():
-        raise HTTPException(
-            status_code=422, detail=f"fhour must be an integer, got {value!r}"
-        )
+        raise HTTPException(status_code=422, detail=f"fhour must be an integer, got {value!r}")
     hour = int(text)
     if not 0 <= hour <= settings.nbm_max_forecast_hour:
         raise HTTPException(
@@ -93,10 +88,7 @@ def _validate_zxy(z: int, x: int, y: int) -> None:
     if not settings.tile_min_zoom <= z <= settings.tile_max_zoom:
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"zoom {z} outside [{settings.tile_min_zoom}, "
-                f"{settings.tile_max_zoom}]"
-            ),
+            detail=(f"zoom {z} outside [{settings.tile_min_zoom}, " f"{settings.tile_max_zoom}]"),
         )
     limit = 2**z
     if not 0 <= x < limit or not 0 <= y < limit:
@@ -150,9 +142,7 @@ async def tile(
     _validate_zxy(z, x, y)
 
     if tilesize not in (256, 512):
-        raise HTTPException(
-            status_code=422, detail=f"tilesize must be 256 or 512, got {tilesize}"
-        )
+        raise HTTPException(status_code=422, detail=f"tilesize must be 256 or 512, got {tilesize}")
 
     element_code = element.strip().lower()
     try:
@@ -191,9 +181,24 @@ async def tile(
         raise HTTPException(status_code=404, detail=f"unknown domain: {exc}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except S3Throttled as exc:
+        # NOAA/S3 is rate-limiting or unhealthy *right now*. Tell browsers
+        # (and the nginx edge cache: proxy_cache_use_stale) to hold their
+        # last good copy and come back shortly instead of stampeding.
+        retry_after = int(exc.retry_after or settings.poller_backoff_base_seconds)
+        log.warning("tile upstream throttled for %s: %s", request.cache_key(plan.colormap), exc)
+        raise HTTPException(
+            status_code=503,
+            detail="upstream NOAA traffic limit hit; retry shortly",
+            headers={"Retry-After": str(max(5, min(retry_after, 300)))},
+        ) from exc
     except Exception as exc:  # noqa: BLE001 — raster failures must not 500 the API
         log.exception("tile render failed for %s", request.cache_key(plan.colormap))
-        raise HTTPException(status_code=503, detail=f"tile render failed: {exc}") from exc
+        raise HTTPException(
+            status_code=503,
+            detail=f"tile render failed: {exc}",
+            headers={"Retry-After": "30"},
+        ) from exc
 
     headers = cache_control_headers(
         is_latest=cycle_is_latest(cycle_id), served_from_cache=rendered.from_cache
@@ -207,9 +212,7 @@ async def tile(
     if rendered.empty:
         if empty == "no_content":
             return Response(status_code=204, headers=headers)
-        return Response(
-            content=empty_tile_payload(), media_type=WEBP_MEDIA, headers=headers
-        )
+        return Response(content=empty_tile_payload(), media_type=WEBP_MEDIA, headers=headers)
 
     return Response(content=rendered.payload, media_type=WEBP_MEDIA, headers=headers)
 

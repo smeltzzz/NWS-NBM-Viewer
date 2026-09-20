@@ -101,6 +101,25 @@ export const MapContainer = forwardRef<MapHandle, MapContainerProps>(function Ma
     );
     instance.addControl(new mapboxgl.ScaleControl({ maxWidth: 160, unit: 'metric' }), 'bottom-left');
 
+    // ── Touch ergonomics ─────────────────────────────────────────────────
+    // Mobile gesture budget for a weather viewer: one-finger pan, two-finger
+    // pinch-to-zoom + double-tap zoom. Anything else (pitch by two-finger
+    // vertical drag, rotation) collides with pinch, and — decisively — with
+    // the timeline scrubber: those extra handlers call preventDefault on
+    // multi-touch pointerrawupdate, so drop them before they can starve the
+    // dock's pointer capture. The NavigationControl still exposes +/- zoom.
+    instance.touchPitch.disable();
+    instance.dragRotate.disable();
+    instance.touchZoomRotate.disableRotation();
+    instance.doubleClickZoom.enable();
+    instance.scrollZoom.enable();
+    // Keep inertia but shorten it so scrub/pan handoffs feel snappy on touch.
+    instance.dragPan.enable();
+    // Guard against iOS Safari's page-zoom fighting map gestures: the canvas
+    // consumes the touches, the shell declares `touch-action: none`.
+    const canvas = instance.getCanvas();
+    if (canvas) canvas.style.touchAction = 'none';
+
     mapRef.current = instance;
     setMap(instance);
 

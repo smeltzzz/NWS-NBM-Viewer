@@ -1,0 +1,22 @@
+# Flake8 policy for the backend — aligned with [tool.black] in pyproject.toml.
+[flake8]
+max-line-length = 100
+extend-ignore =
+    # Black formats slices/line-wraps in ways these checks disagree with.
+    E203,
+    W503,
+    # FastAPI's Query(...)/Path(...) defaults are function calls in signatures.
+    B008,
+    # Module-level `import X` inside try/except fallbacks are intentional.
+    E402
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    data,
+    .pytest_cache
+per-file-ignores =
+    # Test modules deliberately import private helpers (monkeypatching seams).
+    tests/*: SLF001
+    # The cron package re-exports job wiring from module docs.
+    app/cron/__init__.py: F401

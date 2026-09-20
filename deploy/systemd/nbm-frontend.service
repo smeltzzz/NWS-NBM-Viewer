@@ -1,0 +1,38 @@
+# NWS NBM Viewer — Next.js standalone server on a bare Linux VPS.
+#
+# Build once as the deploy user (or via CI artifact):
+#   cd /opt/nbm-viewer/frontend && npm ci && npm run build
+# The frontend.Dockerfile "prod" stage shows the exact standalone layout:
+# server.js + .next/static + public copied to /opt/nbm-viewer/frontend/app.
+#
+#   sudo cp deploy/systemd/nbm-frontend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now nbm-frontend
+
+[Unit]
+Description=NWS NBM Viewer — Next.js frontend (standalone server)
+Documentation=https://github.com/smeltzzz/NWS-NBM-Viewer
+After=network-online.target nbm-api.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=nbm
+Group=nbm
+WorkingDirectory=/opt/nbm-viewer/frontend/app
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3000
+Environment=API_PROXY_TARGET=http://127.0.0.1:8000
+EnvironmentFile=-/etc/nbm-viewer/nbm.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+MemoryMax=1G
+LimitNOFILE=32768
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

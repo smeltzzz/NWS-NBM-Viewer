@@ -11,8 +11,10 @@ from typing import Any
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config import NbmDomain, NbmProduct
+from app.config import NbmDomain, NbmProduct, settings
 from app.core.catalog import DOMAIN_CATALOG, catalog_dict
+from app.core.pointer import RunPointer
+from app.logging_config import get_logger
 from app.core.s3_client import (
     S3Client,
     S3ClientError,
@@ -21,6 +23,8 @@ from app.core.s3_client import (
 )
 
 router = APIRouter(tags=["runs", "catalog"])
+
+log = get_logger(__name__)
 
 # Standard NBM core layout.  The result of discovery is always based on HEADs
 # against NOAA, so a delayed/missing hour is omitted rather than advertised by
@@ -210,18 +214,83 @@ def get_s3_client() -> S3Client:
     return S3Client()
 
 
-@router.get("/runs/latest", summary="Discover the latest completed NBM run")
+@router.get(
+    "/runs/latest",
+    summary="The latest NBM run (poller pointer, live-discovered on demand)",
+)
 async def latest_run(
     domain: NbmDomain = Query(default="co"),
     product: NbmProduct = Query(default="core"),
+    force: bool = Query(False, description="Bypass the poller pointer and live-discover"),
 ) -> dict[str, object]:
-    run = await discover_latest_run(domain=domain, product=product)
-    # Include the record under `run` as well as top-level fields.  The latter
-    # keeps this endpoint convenient for simple clients while the former makes
-    # the response extensible with discovery diagnostics.
-    body: dict[str, object] = {"run": run.model_dump(mode="json") if run else None}
-    if run:
-        body.update(run.model_dump(mode="json"))
+    """Latest published cycle + warm-up/diagnostics from the active-cycle pointer.
+
+    With the poller running (``SCHEDULER_ENABLED=true``) this is an O(1) read
+    of the pointer the 10-minute job maintains; while the pointer is fresh no
+    NOAA traffic is involved at all.  An absent/stale pointer falls back to
+    live discovery (the original behaviour) and re-publishes the pointer, so a
+    single API worker without a scheduler still answers correctly — that is the
+    graceful-degradation contract of the whole endpoint.
+    """
+    from app.core.pointer import fetch_pointer, publish_pointer
+
+    if not force:
+        pointer = fetch_pointer(domain, product)
+        if pointer is not None and pointer.is_fresh():
+            return pointer.as_api_dict()
+
+    try:
+        run = await discover_latest_run(domain=domain, product=product)
+    except Exception as exc:  # noqa: BLE001 — NOAA outage must not 500 the app
+        log.warning("live run discovery failed (%s); serving last known good", exc)
+        run, discovery_failed = None, True
+    else:
+        discovery_failed = False
+
+    if run is None:
+        # NOAA delayed everything in the look-back window (or we are offline).
+        # Fall back to the last known-good pointer instead of a bare null so
+        # clients keep rendering the newest cycle they already know about,
+        # now flagged stale.
+        pointer = fetch_pointer(domain, product)
+        if pointer is not None:
+            body = pointer.as_api_dict()
+            body["pointer"]["stale"] = True
+            body["pointer"]["degraded"] = True
+            body["pointer"]["upstream_error"] = discovery_failed
+            return body
+        return {"run": None}
+
+    body: dict[str, object] = {"run": run.model_dump(mode="json")}
+    body.update(run.model_dump(mode="json"))
+    window = set(range(1, settings.poller_complete_window_hours + 1))
+    complete = window.issubset(set(run.available_forecast_hours))
+    try:
+        publish_pointer(
+            RunPointer(
+                date=run.date,
+                cycle=run.cycle,
+                domain=domain,
+                product=product,
+                available_forecast_hours=list(run.available_forecast_hours),
+                complete=complete,
+                state="complete" if complete else "ingesting",
+                source="live",
+            )
+        )
+    except Exception:  # noqa: BLE001 — pointer is an optimisation, not a dependency
+        pass
+    body["pointer"] = {
+        "cycle": f"{run.date}{run.cycle:02d}",
+        "state": "complete" if complete else "ingesting",
+        "complete": complete,
+        "source": "live",
+        "observed_at": None,
+        "age_seconds": 0.0,
+        "stale": False,
+        "degraded": False,
+        "warmup": None,
+    }
     return body
 
 

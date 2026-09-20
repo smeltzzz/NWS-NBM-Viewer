@@ -55,9 +55,19 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "
 # ── Prod: immutable source, non-root, multiple workers ────────────────────────
 FROM base AS prod
 
+# 24/7 defaults baked in: background scheduler + NOAA active-cycle poller
+# (owned by exactly one worker via a file lock) and 72 h tile retention.
+# Override any of these via environment in the orchestrator.
 ENV ENVIRONMENT=production \
     LOG_LEVEL=warning \
-    WEB_CONCURRENCY=2
+    WEB_CONCURRENCY=2 \
+    SCHEDULER_ENABLED=true \
+    POLLER_ENABLED=true \
+    POLLER_INTERVAL_MINUTES=10 \
+    CACHE_WARMUP_ON_START=false \
+    CACHE_MAX_AGE_HOURS=72 \
+    CACHE_EVICTION_MINUTES=60 \
+    POLLER_OPS_ENDPOINTS_ENABLED=true
 
 RUN useradd --create-home --uid 10001 nbm && \
     mkdir -p /data/tilecache && chown -R nbm:nbm /data /app
@@ -70,4 +80,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/health/live || exit 1
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --proxy-headers --no-access-log"]
+# Concurrency-hardened uvicorn flags:
+#   --backlog               deep accept queue during tile storms
+#   --limit-concurrency     shed load (503) instead of melting the loop
+#   --limit-max-requests    recycle workers gently (memory hygiene)
+#   --timeout-keep-alive    match the edge proxy's keepalive window
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-2} --backlog ${UVICORN_BACKLOG:-2048} --limit-concurrency ${UVICORN_LIMIT_CONCURRENCY:-1000} --limit-max-requests ${UVICORN_LIMIT_MAX_REQUESTS:-250000} --timeout-keep-alive ${UVICORN_KEEPALIVE_SECONDS:-75} --proxy-headers --no-access-log"]

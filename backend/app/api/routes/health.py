@@ -77,18 +77,31 @@ def deep_health(response: Response) -> dict[str, object]:
     cache_ok = get_cache().ping()
 
     overall: HealthStatus = "ok" if (healthy and cache_ok) else "degraded"
+    checks: dict[str, object] = {
+        "cache": {"backend": settings.cache_backend, "healthy": cache_ok},
+        "upstreams": upstreams,
+        "is_isolated_environment": not healthy,
+    }
+    # Background-cycle observability. Informational only: a poller hiccup
+    # must not flip health — the API degrades to the last known-good pointer.
+    if settings.scheduler_enabled:
+        try:
+            from app.cron.poller import status_snapshot
+
+            poller_state = status_snapshot()
+            checks["poller"] = poller_state
+            if poller_state.get("consecutive_failures", 0) >= 3:
+                overall = "degraded"
+                checks["poller_degraded"] = True
+        except Exception as exc:  # noqa: BLE001 — health reporting is best effort
+            checks["poller"] = {"error": f"{type(exc).__name__}: {exc}"}
     payload: dict[str, object] = {
         "status": overall,
         "service": settings.app_name,
         "version": settings.app_version,
         "environment": settings.environment,
-        "checks": {
-            "cache": {"backend": settings.cache_backend, "healthy": cache_ok},
-            "upstreams": upstreams,
-            "is_isolated_environment": not healthy,
-        },
+        "checks": checks,
     }
     if overall != "ok":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return payload
-

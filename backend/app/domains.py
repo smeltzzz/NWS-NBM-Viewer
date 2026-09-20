@@ -48,7 +48,7 @@ DOMAINS: dict[str, Domain] = {
         "name": "Hawaii",
         "resolution_km": 2.5,
         "cycles_per_day": 24,
-        "cycles": list(range(0,24)),
+        "cycles": list(range(0, 24)),
         "notes": "Hourly core + 4x daily QMD; 2.5 km",
         "bbox": (-161.0, 18.0, -154.0, 23.0),
     },

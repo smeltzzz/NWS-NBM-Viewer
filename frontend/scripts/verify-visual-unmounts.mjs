@@ -415,7 +415,11 @@ check('StationPicker: map click listener detached on unmount',
 
 const shellSrc = readSrc('components/map/MapShell.tsx');
 check('MapShell: modal unmounts on close (conditional render)',
-  /\{station && \(\s*<MeteogramModal/.test(shellSrc) && /onClose=\{closeMeteogram\}/.test(shellSrc));
+  // (a panel ErrorBoundary may wrap the modal — the conditional guard is
+  // what matters, so allow any wrapper elements between `{station && (` and
+  // the modal itself.)
+  /\{station && \(\s*(?:<ErrorBoundary[^>]*>\s*)?<MeteogramModal/.test(shellSrc) &&
+  /onClose=\{closeMeteogram\}/.test(shellSrc));
 check('MapShell: wind overlay hidden when mode = grid',
   /windOverlayActive = windProductActive && windDisplay !== 'grid'/.test(shellSrc));
 check('MapShell: hover scrub drives the map timeline',

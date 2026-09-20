@@ -32,6 +32,7 @@ from typing import Any, Callable, Literal, Protocol
 
 from app.config import settings
 from app.logging_config import ensure_cache_dir, get_logger
+from app.services.retention import cap_ttl, evict_diskcache_older_than
 
 __all__ = [
     "CacheStats",
@@ -41,6 +42,7 @@ __all__ = [
     "cycle_is_latest",
     "get_grid_cache",
     "get_tile_cache",
+    "purge_tile_caches",
     "reset_caches",
     "tile_key",
 ]
@@ -252,9 +254,7 @@ class GridCache:
         return 1
 
     def _evict(self) -> None:
-        while self._data and (
-            self._bytes > self.max_bytes or len(self._data) > self.max_entries
-        ):
+        while self._data and (self._bytes > self.max_bytes or len(self._data) > self.max_entries):
             _key, victim = self._data.popitem(last=False)
             self._bytes -= self._sizeof(victim)
             self._stats.evictions += 1
@@ -268,15 +268,23 @@ class GridCache:
 class _Backend(Protocol):
     def get(self, key: str) -> bytes | None: ...
     def set(self, key: str, value: bytes, ttl: int) -> None: ...
+
+    # Evict entries past the retention window; return how many went.
+    def purge_expired(self) -> int: ...
     def close(self) -> None: ...
 
 
 class _MemoryBackend:
-    """Process-local TTL cache; used for tests and as a Redis/disk fallback."""
+    """Process-local TTL cache; used for tests and as a Redis/disk fallback.
+
+    Entries carry both an expiry (clamped to the retention window) and their
+    store time, so :meth:`purge_expired` can drop anything older than
+    ``settings.cache_max_age_hours`` even when it was written with no TTL.
+    """
 
     def __init__(self, *, max_entries: int = 4096) -> None:
         self.max_entries = max_entries
-        self._data: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
+        self._data: OrderedDict[str, tuple[float, float, bytes]] = OrderedDict()
         self._lock = threading.Lock()
 
     def get(self, key: str) -> bytes | None:
@@ -284,7 +292,7 @@ class _MemoryBackend:
             entry = self._data.get(key)
             if entry is None:
                 return None
-            expires, value = entry
+            expires, _stored_at, value = entry
             if expires and expires < time.monotonic():
                 del self._data[key]
                 return None
@@ -292,12 +300,23 @@ class _MemoryBackend:
             return value
 
     def set(self, key: str, value: bytes, ttl: int) -> None:
-        expires = time.monotonic() + ttl if ttl > 0 else 0.0
+        now = time.monotonic()
+        ttl = cap_ttl(ttl, settings.cache_max_age_seconds)
+        expires = now + ttl if ttl > 0 else 0.0
         with self._lock:
-            self._data[key] = (expires, value)
+            self._data[key] = (expires, now, value)
             self._data.move_to_end(key)
             while len(self._data) > self.max_entries:
                 self._data.popitem(last=False)
+
+    def purge_expired(self) -> int:
+        cutoff = time.monotonic() - settings.cache_max_age_seconds
+        removed = 0
+        with self._lock:
+            for key in [k for k, (_e, stored, _v) in self._data.items() if stored <= cutoff]:
+                del self._data[key]
+                removed += 1
+        return removed
 
     def close(self) -> None:
         with self._lock:
@@ -319,7 +338,18 @@ class _DiskBackend:
         return None if value is None else bytes(value)
 
     def set(self, key: str, value: bytes, ttl: int) -> None:
+        # Retention: even "never expires" writes (historical tiles are
+        # immutable, so the renderer passes ttl=None) are clamped to the
+        # configured disk window to bound TILE_CACHE_DIR growth.
+        ttl = cap_ttl(ttl, settings.cache_max_age_seconds)
         self._cache.set(key, value, expire=ttl if ttl > 0 else None, retry=True)
+
+    def purge_expired(self) -> int:
+        return evict_diskcache_older_than(self._cache, settings.cache_max_age_seconds).removed
+
+    def eviction_report(self):
+        """Full sweep report (used by the poller + ops endpoint)."""
+        return evict_diskcache_older_than(self._cache, settings.cache_max_age_seconds)
 
     def close(self) -> None:
         self._cache.close()
@@ -337,7 +367,15 @@ class _RedisBackend:
         return None if value is None else bytes(value)
 
     def set(self, key: str, value: bytes, ttl: int) -> None:
+        ttl = cap_ttl(ttl, settings.cache_max_age_seconds)
+        # Redis expires are native; nothing to sweep — TTLs do the work.
         self._client.set(f"nbm:tile:{key}", value, ex=ttl if ttl > 0 else None)
+
+    def purge_expired(self) -> int:
+        return 0
+
+    def eviction_report(self) -> None:
+        return None
 
     def close(self) -> None:
         try:
@@ -373,9 +411,7 @@ class TileCache:
         if name == "disk":
             try:
                 directory = ensure_cache_dir(settings.tile_cache_path / "webp")
-                backend = _DiskBackend(
-                    directory, size_limit=settings.cache_size_limit_bytes
-                )
+                backend = _DiskBackend(directory, size_limit=settings.cache_size_limit_bytes)
                 log.info(
                     "tile cache: disk at %s (limit %.1f GB)",
                     directory,
@@ -430,6 +466,20 @@ class TileCache:
         with self._lock:
             return self._stats
 
+    def purge_expired(self) -> int:
+        """Retention sweep for the encoded-tile tier (never raises)."""
+        try:
+            purge = getattr(self._backend, "purge_expired", None)
+            return int(purge()) if callable(purge) else 0
+        except Exception as exc:  # noqa: BLE001 — retention must not crash a job
+            log.warning("tile cache purge failed: %s", exc)
+            return 0
+
+    def eviction_report(self):
+        """Detailed sweep report, when the backend can provide one."""
+        report = getattr(self._backend, "eviction_report", None)
+        return report() if callable(report) else None
+
     def close(self) -> None:
         try:
             self._backend.close()
@@ -472,6 +522,31 @@ def get_tile_cache() -> TileCache:
     return _tile_cache
 
 
+def purge_tile_caches() -> dict[str, object]:
+    """Retention entry point used by the poller's hourly sweep job.
+
+    Sweeps the encoded-tile tier and, for the disk backend, the S3 sidecar
+    cache that shares ``TILE_CACHE_DIR``.  Any failure degrades to a zero
+    count — the cache is never allowed to take the application down.
+    """
+    reports: dict[str, object] = {}
+    tile_cache = get_tile_cache()
+    report = tile_cache.eviction_report()
+    removed = report.removed if report is not None else tile_cache.purge_expired()
+    reports["tiles"] = report.as_dict() if report is not None else {"removed": removed}
+    try:
+        from app.api.endpoints.runs import get_s3_client
+
+        purge = getattr(get_s3_client(), "purge_expired", None)
+        if callable(purge):
+            reports["s3"] = purge()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("s3 sidecar purge skipped: %s", exc)
+        reports["s3"] = {"error": f"{type(exc).__name__}: {exc}"}
+    reports["removed"] = removed
+    return reports
+
+
 def reset_caches() -> None:
     """Drop both tiers.  Used by tests and by ``/tiles/cache?reset=1``."""
     global _grid_cache, _tile_cache
@@ -505,9 +580,7 @@ def cycle_is_latest(
     if cycle.tzinfo is None:
         cycle = cycle.replace(tzinfo=timezone.utc)
     window = timedelta(
-        hours=settings.latest_cycle_tolerance_hours
-        if tolerance_hours is None
-        else tolerance_hours
+        hours=settings.latest_cycle_tolerance_hours if tolerance_hours is None else tolerance_hours
     )
     return current - cycle <= window
 
@@ -538,9 +611,7 @@ def cache_control_headers(
     if is_latest:
         directive = f"public, max-age={settings.tile_cache_max_age_latest}"
     else:
-        directive = (
-            f"public, max-age={settings.tile_cache_max_age_historical}, immutable"
-        )
+        directive = f"public, max-age={settings.tile_cache_max_age_historical}, immutable"
     headers = {"Cache-Control": directive}
     if served_from_cache:
         headers["Age"] = "0"

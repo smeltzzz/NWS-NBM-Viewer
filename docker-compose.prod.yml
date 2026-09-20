@@ -1,0 +1,171 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# NWS NBM Viewer — PRODUCTION stack (24/7, high concurrency, low latency)
+#
+#   docker compose -f docker-compose.prod.yml up -d --build      # one command
+#   open http://<host>/                                           # gateway :80
+#
+# Topology:  client ── nginx gateway (:80) ──▶ frontend (:3000, Next standalone)
+#                                         └──▶ backend  (:8000, uvicorn×N) ── redis
+#                                                    └── APScheduler poller (1 owner)
+# The dev compose file (docker-compose.yml) stays available for hot reload;
+# this file is the deployment artifact referenced by the README.
+# ═════════════════════════════════════════════════════════════════════════════
+name: nws-nbm-viewer-prod
+
+# Shared production environment for both app services.
+x-app-env: &app-env
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  API_PREFIX: ${API_PREFIX:-/api/v1}
+  CORS_ORIGINS: ${CORS_ORIGINS:-}
+  CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX:-}
+  AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+  S3_BUCKET_GRIB: ${S3_BUCKET_GRIB:-noaa-nbm-grib2-pds}
+  S3_BUCKET_COG: ${S3_BUCKET_COG:-noaa-nbm-pds}
+  S3_GRIB_KEY_TEMPLATE: ${S3_GRIB_KEY_TEMPLATE:-blend.{date}/{cycle}/{product}/blend.t{cycle}z.{product}.f{hour:03d}.{domain}.grib2}
+  NOMADS_BASE_URL: ${NOMADS_BASE_URL:-https://nomads.ncep.noaa.gov/pub/data/nccf/com/blend/prod}
+  NOMADS_FALLBACK_ENABLED: ${NOMADS_FALLBACK_ENABLED:-true}
+  TILE_CACHE_DIR: /data/tilecache
+  CACHE_SIZE_LIMIT_GB: ${CACHE_SIZE_LIMIT_GB:-20}
+  CACHE_BACKEND: ${CACHE_BACKEND:-redis}
+  REDIS_URL: redis://redis:6379/0
+  # ── 24/7 automation: on by default here, off in dev ─────────────────────
+  SCHEDULER_ENABLED: "true"
+  POLLER_ENABLED: "true"
+  POLLER_INTERVAL_MINUTES: ${POLLER_INTERVAL_MINUTES:-10}
+  POLLER_WARMUP_ENABLED: ${POLLER_WARMUP_ENABLED:-true}
+  CACHE_MAX_AGE_HOURS: ${CACHE_MAX_AGE_HOURS:-72}
+  CACHE_EVICTION_MINUTES: ${CACHE_EVICTION_MINUTES:-60}
+  UPSTREAM_PROBE_ENABLED: "true"
+
+services:
+  # ── Nginx gateway: gzip+brotli, tile micro-cache, security headers ────────
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/nginx.Dockerfile
+    image: nws-nbm-viewer-gateway:latest
+    container_name: nbm-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-80}:80"
+    volumes:
+      - gateway-cache:/var/cache/nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    networks:
+      - nbm-net
+
+  # ── FastAPI backend: prod image, N workers, poller enabled ────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+      target: prod
+    image: nws-nbm-viewer-backend:prod
+    container_name: nbm-backend
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
+    volumes:
+      - tile-cache-prod:/data/tilecache
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3).status == 200 else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - nbm-net
+
+  # ── Optional standalone poller daemon (dedicated host / scaled deploys) ───
+  # Shares the tile-cache volume with the API; the advisory poller lock makes
+  # it a no-op when an API worker already owns polling. Enable with:
+  #   docker compose -f docker-compose.prod.yml --profile poller up -d --build
+  poller:
+    profiles: ["poller"]
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+      target: prod
+    image: nws-nbm-viewer-backend:prod
+    container_name: nbm-poller
+    restart: unless-stopped
+    command: ["python", "-m", "app.cron.poller"]
+    environment:
+      <<: *app-env
+    volumes:
+      - tile-cache-prod:/data/tilecache
+    networks:
+      - nbm-net
+
+  # ── Next.js standalone server ──────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+      target: prod
+    image: nws-nbm-viewer-frontend:prod
+    container_name: nbm-frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PROXY_TARGET: http://backend:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api/v1}
+      NEXT_PUBLIC_BASEMAP: ${NEXT_PUBLIC_BASEMAP:-dark}
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - nbm-net
+
+  # ── Redis: shared tile cache + multi-worker state (CACHE_BACKEND=redis) ───
+  redis:
+    image: redis:7-alpine
+    container_name: nbm-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "${REDIS_MAXMEMORY:-1gb}", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - nbm-net
+
+volumes:
+  tile-cache-prod:
+    driver: local
+  gateway-cache:
+    driver: local
+
+networks:
+  nbm-net:
+    driver: bridge

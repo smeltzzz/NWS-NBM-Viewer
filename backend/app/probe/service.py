@@ -139,9 +139,7 @@ def _interpolate_wind_grid(
 
     # Build the transformer inside the worker thread: the pyproj object is
     # then used by exactly one thread for the lifetime of this call.
-    transformer = pyproj.Transformer.from_crs(
-        CRS.from_epsg(4326), grid.crs, always_xy=True
-    )
+    transformer = pyproj.Transformer.from_crs(CRS.from_epsg(4326), grid.crs, always_xy=True)
     xs, ys = transformer.transform(lon_grid.ravel(), lat_grid.ravel())
 
     # Fractional row/col via the inverse affine (same algebra as GridSampler).
@@ -530,9 +528,7 @@ class ProbeService:
                 else:
                     display = _to_display(raw, plan, units)
                     display = _round(display, plan.precision)
-                    unit_label = (
-                        plan.imperial_unit if units == "imperial" else plan.metric_unit
-                    )
+                    unit_label = plan.imperial_unit if units == "imperial" else plan.metric_unit
                     category = None
                     formatted = None
                     if plan.variable == "PTYPE" and display is not None:
@@ -561,9 +557,7 @@ class ProbeService:
             domain=domain,
             cycle=cycle_id,
             fhour=fhour,
-            valid_time_utc=valid_time_utc(cycle_id, fhour).strftime(
-                "%Y-%m-%dT%H:%M:%SZ"
-            ),
+            valid_time_utc=valid_time_utc(cycle_id, fhour).strftime("%Y-%m-%dT%H:%M:%SZ"),
             method=method,
             grid_index=grid_index_payload,
             values=values,
@@ -590,9 +584,7 @@ class ProbeService:
 
         hours = meteogram_forecast_hours(start_fhour, end_fhour)
         if not hours:
-            raise ValueError(
-                f"no forecast hours in range [{start_fhour}, {end_fhour}]"
-            )
+            raise ValueError(f"no forecast hours in range [{start_fhour}, {end_fhour}]")
 
         # Build the series → element plan map (skip unknown elements gracefully).
         series_plans: dict[str, ProbeElementPlan] = {}
@@ -626,9 +618,7 @@ class ProbeService:
         for fhour in hours:
             kwargs: dict[str, Any] = {
                 "forecast_hour": fhour,
-                "valid_time_utc": valid_time_utc(cycle_id, fhour).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
+                "valid_time_utc": valid_time_utc(cycle_id, fhour).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
             for series_key, plan in series_plans.items():
                 entry = samples.get((plan.element, fhour))
@@ -702,9 +692,7 @@ class ProbeService:
             raise KeyError(f"unknown NBM domain {domain!r}")
         cycle_id = parse_cycle(cycle)
         if not 0 <= fhour <= settings.nbm_max_forecast_hour:
-            raise ValueError(
-                f"fhour {fhour} outside [0, {settings.nbm_max_forecast_hour}]"
-            )
+            raise ValueError(f"fhour {fhour} outside [0, {settings.nbm_max_forecast_hour}]")
         if not (-180.0 <= min_lon < max_lon <= 180.0):
             raise ValueError("bbox longitude requires -180 <= min_lon < max_lon <= 180")
         if not (-90.0 <= min_lat < max_lat <= 90.0):
@@ -768,9 +756,7 @@ class ProbeService:
         if domain not in DOMAIN_CATALOG:
             raise KeyError(f"unknown NBM domain {domain!r}")
         if not self.sampler.in_domain_bbox(domain, lat, lon):
-            raise OutOfDomainError(
-                f"({lat}, {lon}) is outside the {domain} domain footprint"
-            )
+            raise OutOfDomainError(f"({lat}, {lon}) is outside the {domain} domain footprint")
 
     @staticmethod
     def _resolve_elements(elements: list[str] | None) -> list[str]:
@@ -829,10 +815,7 @@ class ProbeService:
         for element in plans:
             for fhour in fhours:
                 key = (element, fhour)
-                cache_key = (
-                    f"{domain}:{cycle}:{element}:f{fhour:03d}:"
-                    f"{lat_k}:{lon_k}:{method}"
-                )
+                cache_key = f"{domain}:{cycle}:{element}:f{fhour:03d}:" f"{lat_k}:{lon_k}:{method}"
                 hit = self._value_cache.get(cache_key)
                 if hit is not None:
                     raw, nodata = hit
@@ -919,9 +902,7 @@ class ProbeService:
         result = self.sampler.sample(grid, index, method=method)
         return result.value, index, result.nodata
 
-    async def _load_grid(
-        self, domain: str, cycle: str, element: str, fhour: int
-    ) -> Grid:
+    async def _load_grid(self, domain: str, cycle: str, element: str, fhour: int) -> Grid:
         """Fetch one decoded grid for sampling.
 
         Prefers ``source.grid()`` when available (synthetic fast path) so a
@@ -967,9 +948,7 @@ class ProbeService:
         return f"{value:.{plan.precision}f}{unit}"
 
     @staticmethod
-    def _build_summary(
-        values: dict[str, dict[str, Any]], units: UnitsSystem
-    ) -> dict[str, Any]:
+    def _build_summary(values: dict[str, dict[str, Any]], units: UnitsSystem) -> dict[str, Any]:
         """Human-friendly rollup: Temperature, Dewpoint, Wind, Gust, QPF, Sky."""
 
         def _v(code: str) -> float | None:
@@ -998,9 +977,7 @@ class ProbeService:
                 wind_str = f"{wind:.0f} {_u('wind')}"
 
         return {
-            "temperature": (
-                f"{temp:.1f}{_u('tmp')}" if temp is not None else None
-            ),
+            "temperature": (f"{temp:.1f}{_u('tmp')}" if temp is not None else None),
             "dewpoint": f"{dpt:.1f}{_u('dpt')}" if dpt is not None else None,
             "wind": wind_str,
             "wind_gust": f"{gust:.0f} {_u('gust')}" if gust is not None else None,
@@ -1015,9 +992,7 @@ class ProbeService:
     ) -> dict[str, str]:
         labels: dict[str, str] = {}
         for key, plan in series_plans.items():
-            labels[key] = (
-                plan.imperial_unit if units == "imperial" else plan.metric_unit
-            )
+            labels[key] = plan.imperial_unit if units == "imperial" else plan.metric_unit
         return labels
 
 

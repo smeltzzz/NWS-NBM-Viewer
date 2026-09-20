@@ -84,9 +84,7 @@ async def probe_point(
         ),
     ),
     units: UnitsSystem = Query("imperial", description="Display unit system"),
-    method: SampleMethod = Query(
-        "bilinear", description="Grid sampling: bilinear or nearest"
-    ),
+    method: SampleMethod = Query("bilinear", description="Grid sampling: bilinear or nearest"),
 ) -> dict:
     """Return instant values at ``(lat, lon)`` for one forecast hour.
 
@@ -154,9 +152,7 @@ async def probe_meteogram(
     start_fhour: int = Query(1, ge=0, le=264, description="First forecast hour"),
     end_fhour: int = Query(264, ge=0, le=264, description="Last forecast hour"),
     units: UnitsSystem = Query("imperial", description="Display unit system"),
-    method: SampleMethod = Query(
-        "bilinear", description="Grid sampling: bilinear or nearest"
-    ),
+    method: SampleMethod = Query("bilinear", description="Grid sampling: bilinear or nearest"),
 ) -> dict:
     """Return the multi-day forecast curve set for one map location.
 
@@ -280,7 +276,9 @@ async def probe_wind_field(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        log.exception("probe/wind-field failed for %s/%s f%03d", domain_code, cycle_id, forecast_hour)
+        log.exception(
+            "probe/wind-field failed for %s/%s f%03d", domain_code, cycle_id, forecast_hour
+        )
         raise HTTPException(status_code=503, detail=f"wind-field failed: {exc}") from exc
 
     elapsed = (time.perf_counter() - started) * 1000.0

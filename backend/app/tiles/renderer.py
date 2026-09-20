@@ -53,7 +53,6 @@ from app.tiles.cache import (
 )
 from app.tiles.grib import Grid, decode_message
 from app.tiles.source import (
-    ElementNotRenderable,
     GridRequest,
     RenderPlan,
     get_data_source,
@@ -165,9 +164,7 @@ def empty_tile_payload() -> bytes:
         from PIL import Image
 
         buffer = io.BytesIO()
-        Image.new("RGBA", (1, 1), (0, 0, 0, 0)).save(
-            buffer, format="WEBP", lossless=True
-        )
+        Image.new("RGBA", (1, 1), (0, 0, 0, 0)).save(buffer, format="WEBP", lossless=True)
         _EMPTY = _EmptyTile(payload=buffer.getvalue())
     return _EMPTY.payload
 
@@ -184,9 +181,7 @@ def tile_bounds_3857(z: int, x: int, y: int) -> tuple[float, float, float, float
     return (bounds.left, bounds.bottom, bounds.right, bounds.top)
 
 
-def _overlaps(
-    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
-) -> bool:
+def _overlaps(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
     return not (a[2] <= b[0] or a[0] >= b[2] or a[3] <= b[1] or a[1] >= b[3])
 
 
@@ -219,7 +214,9 @@ class TileRenderer:
         # 1. Bounds check — before any cache or network work.
         t0 = time.perf_counter()
         if not self.tile_intersects_domain(request):
-            return RenderedTile(payload=b"", empty=True, timings={"bounds": time.perf_counter() - t0})
+            return RenderedTile(
+                payload=b"", empty=True, timings={"bounds": time.perf_counter() - t0}
+            )
         timings["bounds"] = time.perf_counter() - t0
 
         plan = render_plan(request.element)
@@ -248,19 +245,13 @@ class TileRenderer:
 
         # 4-6. Warp + colormap + encode (CPU bound; keep the loop free).
         t0 = time.perf_counter()
-        payload = await asyncio.to_thread(
-            self._render_payload, grid, request, plan, colormap_name
-        )
+        payload = await asyncio.to_thread(self._render_payload, grid, request, plan, colormap_name)
         timings["render"] = time.perf_counter() - t0
 
         # Negative caching: an empty tile is stored as a sentinel so the next
         # request for it is a hit rather than another 30-50 ms warp.  The live
         # cycle expires on the same clock as the Cache-Control we send.
-        ttl = (
-            settings.tile_cache_ttl_latest_seconds
-            if cycle_is_latest(request.cycle)
-            else None
-        )
+        ttl = settings.tile_cache_ttl_latest_seconds if cycle_is_latest(request.cycle) else None
         await asyncio.to_thread(
             tile_cache.set,
             key,
@@ -326,9 +317,7 @@ class TileRenderer:
         values, _system = colormaps.grib_to_colormap_units(
             warped, plan.unit_kind, plan.grib_unit  # type: ignore[arg-type]
         )
-        rgba = colormaps.apply(
-            values, colormap_name, units=request.units, opacity=request.opacity
-        )
+        rgba = colormaps.apply(values, colormap_name, units=request.units, opacity=request.opacity)
         if not rgba[:, :, 3].any():
             return None
 
@@ -478,7 +467,9 @@ def get_tile_renderer() -> TileRenderer:
 def domain_bounds_3857(domain: str) -> tuple[float, float, float, float]:
     """The domain footprint in Web Mercator — used by the capabilities route."""
     bbox = get_tile_renderer().domain_bounds_4326(domain)
-    return transform_bounds(WGS84, WEB_MERCATOR, *bbox, densify_pts=21)  # type: ignore[return-value]
+    return transform_bounds(  # type: ignore[return-value]
+        WGS84, WEB_MERCATOR, *bbox, densify_pts=21
+    )
 
 
 # ``rasterio`` is imported for its ``MemoryFile``-backed GRIB reader and for

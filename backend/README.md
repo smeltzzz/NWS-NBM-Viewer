@@ -56,6 +56,42 @@ Then visit <http://127.0.0.1:8000/docs> (Swagger) and
 | GET    | `/probe/point`                                 | Map-click point values at one fhour  |
 | GET    | `/probe/meteogram`                             | Full 264-h meteogram time series     |
 | GET    | `/probe/capabilities`                          | Probe service description            |
+| GET    | `/runs/latest?domain=&product=`                 | Newest confirmed cycle (pointer-first) |
+| GET    | `/poller/status`                               | Jobs, next run, warm-up, lock owner  |
+| POST   | `/poller/poll`                                 | Force one poll tick (rate-limited)   |
+| POST   | `/poller/evict`                                | Immediate 72 h/30 d retention sweep  |
+
+## 24/7 background loop
+
+`app.cron.poller` owns three APScheduler jobs; whichever uvicorn worker wins
+the `flock` in `TILE_CACHE_DIR` runs them (exactly one per host — and one per
+EFS share across tasks):
+
+| Job                    | Cadence                    | What it does                                        |
+| ---------------------- | -------------------------- | --------------------------------------------------- |
+| `nbm-cycle-poll`       | `POLLER_INTERVAL_MINUTES`  | S3-listing scan → publish run pointer → warm-up fresh cycle |
+| `nbm-inventory-refresh`| `INVENTORY_REFRESH_MINUTES`| NOMADS availability probe, cache seed                |
+| `nbm-cache-retention`  | `CACHE_EVICTION_MINUTES`   | 72 h latest / 30 d historical sweep                  |
+
+Run the loop as its own process (keeps render bursts off request-serving
+workers): `python -m app.cron.poller` (it ignores `SCHEDULER_ENABLED` so a
+dedicated poller host "just works"; leadership still goes through the lock).
+`/runs/latest` never depends on the poller — with the pointer stale or absent
+it performs a live discovery itself and flags `stale`/`degraded` honestly.
+
+## Quality gates
+
+```bash
+pip install -r requirements-dev.txt   # black + flake8 (also installed by CI)
+black --check . && flake8 .           # formatting + lint policy (backend/.flake8)
+python -m pytest -q                   # 144 tests, no network needed for most
+```
+
+The production image (`docker/backend.Dockerfile`, target `prod`) bakes in
+`SCHEDULER_ENABLED/POLLER_ENABLED=true`, tuned uvicorn flags
+(`--limit-concurrency`, `--limit-max-requests` worker recycling), a curl-based
+`/health/live` HEALTHCHECK and a non-root user.
+
 ## Environment
 
 Copy `.env.example` (repo root) to `.env`. All keys are documented there; the
