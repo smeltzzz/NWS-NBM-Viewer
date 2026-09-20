@@ -14,7 +14,10 @@
 
 FROM nginx:1.27-alpine AS brotli-build
 
-ARG NGX_BROTLI_REF=71d47fe11b35c973cc296ee27eed32e8965f34c3
+# google/ngx_brotli is maintenance-frozen; pin its final master commit
+# (2023-10-09, "Fix build failed for nginx version branch") so module ABI and
+# vendored brotli v1.1.0 never move underneath a rebuilt image.
+ARG NGX_BROTLI_REF=a71f9312c2deb28875acc7bacfdd5695a111aa53
 
 # Shared CI egress IPs see occasional transient failures from dl-cdn, and
 # --no-cache has no retry loop of its own, so wrap every network step.
