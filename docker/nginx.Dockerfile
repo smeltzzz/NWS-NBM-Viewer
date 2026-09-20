@@ -16,21 +16,22 @@ FROM nginx:1.27-alpine AS brotli-build
 
 ARG NGX_BROTLI_REF=71d47fe11b35c973cc296ee27eed32e8965f34c3
 
-RUN apk add --no-cache \
-        build-base \
-        cmake \
-        git \
-        linux-headers \
-        pcre2-dev \
-        zlib-dev
+# Shared CI egress IPs see occasional transient failures from dl-cdn, and
+# --no-cache has no retry loop of its own, so wrap every network step.
+RUN set -eu; \
+    retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i: $*"; sleep $((i * 4)); done; return 1; }; \
+    retry apk add --no-cache build-base cmake git pcre2-dev zlib-dev
 
 # Match the base image's nginx version exactly so the module ABI aligns.
-RUN NGINX_VERSION="$(nginx -v 2>&1 | sed 's|.*nginx/||')" \
-    && wget -qO /tmp/nginx.tar.gz "http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" \
+RUN set -eu; \
+    retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i: $*"; sleep $((i * 4)); done; return 1; }; \
+    NGINX_VERSION="$(nginx -v 2>&1 | sed 's|.*nginx/||')" \
+    && retry wget -qO /tmp/nginx.tar.gz "http://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" \
     && mkdir -p /build && tar -xzf /tmp/nginx.tar.gz -C /build \
-    && git clone --depth 1 "https://github.com/google/ngx_brotli.git" /build/ngx_brotli \
-    && cd /build/ngx_brotli && git fetch --depth 1 origin "${NGX_BROTLI_REF}" && git checkout FETCH_HEAD \
-    && git submodule update --init --depth 1 \
+    && rm -rf /build/ngx_brotli \
+    && retry git clone --depth 1 "https://github.com/google/ngx_brotli.git" /build/ngx_brotli \
+    && cd /build/ngx_brotli && retry git fetch --depth 1 origin "${NGX_BROTLI_REF}" && git checkout FETCH_HEAD \
+    && retry git submodule update --init --depth 1 \
     && cd "/build/nginx-${NGINX_VERSION}" \
     && ./configure --with-compat \
         --add-dynamic-module=/build/ngx_brotli/deps/brotli \

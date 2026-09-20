@@ -93,22 +93,33 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build gateway image (runs nginx -t as part of the build)
-        run: docker build -t nbm-gateway:ci -f docker/nginx.Dockerfile .
+        run: |
+          # Pre-pull the base with retries: Docker Hub throttles anonymous
+          # pulls from shared runner IPs; a warm cache then makes the build
+          # itself immune to that burst limiting.
+          for attempt in 1 2 3; do
+            docker pull nginx:1.27-alpine && break
+            [ "$attempt" = 3 ] && exit 1
+            echo "base pull failed (attempt $attempt) — retrying in 15s"; sleep 15
+          done
+          docker build --pull=false --progress=plain -t nbm-gateway:ci -f docker/nginx.Dockerfile .
 
       - name: Validate gateway boot (with stub upstreams)
         run: |
-          docker run --rm --name gw \
+          # `-t` config check outside the build (cheap re-proof in CI).
+          docker run --rm --entrypoint nginx nbm-gateway:ci -t
+          CID=$(docker run -d \
             --add-host backend:127.0.0.1 --add-host frontend:127.0.0.1 \
-            nbm-gateway:ci -t
-          docker run -d \
-            --add-host backend:127.0.0.1 --add-host frontend:127.0.0.1 \
-            --health-cmd "true" nbm-gateway:ci
+            nbm-gateway:ci)
+          trap "docker logs $CID 2>&1 | tail -40; docker rm -f $CID >/dev/null" EXIT
           sleep 3
-          if docker ps -q --filter ancestor=nbm-gateway:ci | grep -q .; then
-            echo "gateway container is up"
-            docker kill $(docker ps -q --filter ancestor=nbm-gateway:ci) >/dev/null
+          if [ "$(docker inspect -f '{{.State.Running}}' "$CID")" = true ]; then
+            # /healthz must answer directly, without any upstream.
+            docker exec "$CID" wget -qO- http://127.0.0.1/healthz | grep -q ok
+            echo "gateway boots and /healthz answers"
           else
-            echo "gateway exited at boot:"; docker ps -a --filter ancestor=nbm-gateway:ci --format '{{.Status}}'; exit 1
+            echo "gateway exited at boot: $(docker inspect -f '{{.State.ExitCode}}' "$CID")"
+            exit 1
           fi
 
       - name: Validate docker-compose.yml
