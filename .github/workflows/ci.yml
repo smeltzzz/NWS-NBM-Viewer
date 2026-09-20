@@ -159,7 +159,25 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build backend prod image
-        run: docker build -t nbm-backend:ci --target prod -f docker/backend.Dockerfile backend
+        run: |
+          set -o pipefail
+          docker build --progress=plain -t nbm-backend:ci \
+            --target prod -f docker/backend.Dockerfile backend 2>&1 | tee /tmp/be.log || {
+            { grep -B2 -A8 -m1 -E "error:|ERROR|Error [0-9]+|failed" /tmp/be.log || true
+              echo '--- tail ---'; tail -15 /tmp/be.log; } \
+              | tr -d '\r' | sed 's|%|%25|g; s|:|%3A|g' | paste -sd '%0A' - \
+              | { read -r E || true; echo "::error::${E:0:3500}" || true; }
+            exit 1
+          }
 
       - name: Build frontend prod image
-        run: docker build -t nbm-frontend:ci --target prod -f docker/frontend.Dockerfile frontend
+        run: |
+          set -o pipefail
+          docker build --progress=plain -t nbm-frontend:ci \
+            --target prod -f docker/frontend.Dockerfile frontend 2>&1 | tee /tmp/fe.log || {
+            { grep -B2 -A8 -m1 -E "error:|ERROR|Error [0-9]+|failed" /tmp/fe.log || true
+              echo '--- tail ---'; tail -15 /tmp/fe.log; } \
+              | tr -d '\r' | sed 's|%|%25|g; s|:|%3A|g' | paste -sd '%0A' - \
+              | { read -r E || true; echo "::error::${E:0:3500}" || true; }
+            exit 1
+          }

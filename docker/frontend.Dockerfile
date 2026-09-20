@@ -35,7 +35,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN npm run build && mkdir -p public
 
 # ── Prod: minimal standalone runtime ────────────────────────────────────────
 FROM node:20-bookworm-slim AS prod
