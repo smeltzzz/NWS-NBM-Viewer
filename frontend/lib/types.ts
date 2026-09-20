@@ -73,6 +73,34 @@ export interface LayoutResponse {
   isStaticApproximation: boolean;
 }
 
+/** Warm-up progress published by the backend's active-cycle poller. */
+export interface RunWarmupProgress {
+  status: 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+  total: number;
+  rendered: number;
+  cached_hits: number;
+  errors: number;
+  percent?: number;
+}
+
+/** Pointer diagnostics attached to ``GET /runs/latest``. */
+export interface RunPointerInfo {
+  /** YYYYMMDDHH identifier of the pointed-at cycle. */
+  cycle: string;
+  state: 'ingesting' | 'complete';
+  complete: boolean;
+  /** poller tick vs. per-request live discovery. */
+  source: 'poller' | 'live';
+  observed_at?: string | null;
+  age_seconds?: number;
+  /** NOAA has not published anything newer within the cadence grace window. */
+  stale?: boolean;
+  /** Discovery itself failed; the last known-good run is being served. */
+  degraded?: boolean;
+  upstream_error?: boolean;
+  warmup?: RunWarmupProgress | null;
+}
+
 /** A published NBM cycle (``GET /runs/latest``). */
 export interface LatestRunInfo {
   date: string; // YYYYMMDD (UTC)
@@ -82,6 +110,7 @@ export interface LatestRunInfo {
   product: NbmProduct;
   available_forecast_hours: number[];
   f001_available?: boolean;
+  pointer?: RunPointerInfo;
 }
 
 /** One element sampled by ``GET /probe/point``. */

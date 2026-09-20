@@ -71,11 +71,16 @@ export const api = {
   getLayout: (domain: NbmDomain, product: NbmProduct) =>
     request<LayoutResponse>(`/nbm/layout/${domain}/${product}?include=all`),
 
-  /** Latest completed NBM run for a domain/product (cycle + posted hours). */
+  /**
+   * Latest published NBM run (poller pointer + posted hours).
+   *
+   * `no-store`: this is the app's freshness signal — the browser must see the
+   * poller's newest answer, never a heuristic cache entry.
+   */
   getLatestRun: (domain: NbmDomain, product: NbmProduct) =>
-    request<LatestRunInfo>(
-      `/runs/latest${query({ domain, product })}`,
-    ),
+    request<LatestRunInfo>(`/runs/latest${query({ domain, product })}`, {
+      cache: 'no-store',
+    }),
 
   /** Full 10-day station meteogram time series for one lat/lon. */
   probeMeteogram: ({

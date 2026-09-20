@@ -67,7 +67,10 @@ async def lifespan(application: FastAPI):
 
     if settings.scheduler_enabled:
         stop_scheduler()  # idempotent; safe for --reload child processes
-        start_scheduler()
+        try:
+            await start_scheduler()
+        except Exception as exc:  # noqa: BLE001 — never let jobs block startup
+            log.error("scheduler start failed (%s); serving without background jobs", exc)
 
     log.info("startup complete in %.2fs", _uptime_seconds())
     yield

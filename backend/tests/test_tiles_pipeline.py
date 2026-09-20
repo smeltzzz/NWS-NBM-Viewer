@@ -119,9 +119,7 @@ def test_grib_roundtrip_is_lossless() -> None:
     values = np.linspace(-40.0, 120.0, grid.width * grid.height, dtype=np.float32)
     values = values.reshape(grid.shape)
 
-    payload = encode_message(
-        values, crs=grid.crs, transform=grid.transform, parameter="TMP"
-    )
+    payload = encode_message(values, crs=grid.crs, transform=grid.transform, parameter="TMP")
     assert payload[:4] == b"GRIB"
     assert payload[-4:] == b"7777"
 
@@ -137,12 +135,8 @@ def test_grib_roundtrip_is_lossless() -> None:
     # datum into the geotransform.  The property that matters is that the grid
     # still covers exactly the same ground.
     assert "+proj=lcc" in decoded.crs.to_proj4()
-    original = transform_bounds(
-        grid.crs, "EPSG:4326", *grid.bounds, densify_pts=21
-    )
-    decoded_bounds = transform_bounds(
-        decoded.crs, "EPSG:4326", *decoded.bounds, densify_pts=21
-    )
+    original = transform_bounds(grid.crs, "EPSG:4326", *grid.bounds, densify_pts=21)
+    decoded_bounds = transform_bounds(decoded.crs, "EPSG:4326", *decoded.bounds, densify_pts=21)
     assert np.allclose(original, decoded_bounds, atol=1e-3)
 
 
@@ -310,8 +304,20 @@ def test_unknown_colormap_raises() -> None:
 def test_tile_key_format() -> None:
     key = tile_key("co", "2026091900", "tmp", 24, 5, 7, 12, "imperial")
     assert key == "co:2026091900:tmp:f024:5:7:12:imperial"
-    varied = tile_key("co", "2026091900", "tmp", 24, 5, 7, 12, "metric",
-                      opacity=0.5, smooth=False, colormap="temperature", tilesize=512)
+    varied = tile_key(
+        "co",
+        "2026091900",
+        "tmp",
+        24,
+        5,
+        7,
+        12,
+        "metric",
+        opacity=0.5,
+        smooth=False,
+        colormap="temperature",
+        tilesize=512,
+    )
     assert varied != key
     assert "metric" in varied and "o0.50" in varied and "raw" in varied and "s512" in varied
 
@@ -438,9 +444,10 @@ def test_bilinear_resampling_removes_block_artifacts() -> None:
     bilinear_levels = np.unique(np.round(bilinear, 1))
     nearest_levels = np.unique(np.round(nearest, 1))
     assert len(bilinear_levels) > 5, "bilinear must interpolate across the step"
-    assert set(np.round(nearest_levels).astype(int)) <= {0, 100}, (
-        "nearest-neighbour must stay stepped"
-    )
+    assert set(np.round(nearest_levels).astype(int)) <= {
+        0,
+        100,
+    }, "nearest-neighbour must stay stepped"
     # Both must span the same range; only the transition differs.
     assert bilinear_levels.min() == pytest.approx(0.0, abs=1e-3)
     assert bilinear_levels.max() == pytest.approx(100.0, abs=1e-3)
@@ -594,8 +601,20 @@ def test_negative_cache_marker_round_trips() -> None:
     assert not is_empty_marker(None)
 
     cache = TileCache(backend_name="memory")
-    key = tile_key("co", "2020031500", "qpf_24h", 24, 5, 7, 12, "imperial",
-                   opacity=1.0, smooth=True, colormap="precip_accum", tilesize=256)
+    key = tile_key(
+        "co",
+        "2020031500",
+        "qpf_24h",
+        24,
+        5,
+        7,
+        12,
+        "imperial",
+        opacity=1.0,
+        smooth=True,
+        colormap="precip_accum",
+        tilesize=256,
+    )
     cache.set(key, EMPTY_TILE_MARKER)
     assert cache.get(key) == EMPTY_TILE_MARKER
 
@@ -620,7 +639,9 @@ def test_latest_cycle_tiles_expire_sooner(client: TestClient) -> None:
 
     latest = client.get(_url("co", fresh, "tmp", "f024", *INSIDE))
     stale = client.get(_url("co", old, "tmp", "f024", *INSIDE))
-    assert latest.headers["cache-control"] == f"public, max-age={settings.tile_cache_max_age_latest}"
+    assert (
+        latest.headers["cache-control"] == f"public, max-age={settings.tile_cache_max_age_latest}"
+    )
     assert stale.headers["cache-control"] == (
         f"public, max-age={settings.tile_cache_max_age_historical}, immutable"
     )
@@ -652,7 +673,6 @@ def test_layer1_grid_is_shared_across_tiles(client: TestClient) -> None:
 
 def test_out_of_bounds_tile_short_circuits(client: TestClient) -> None:
     """A tile outside the domain must not reach the data source at all."""
-    from app.tiles import source as source_module
 
     calls: list[GridRequest] = []
 
@@ -674,9 +694,7 @@ def test_out_of_bounds_tile_short_circuits(client: TestClient) -> None:
         assert response.headers["X-Tile-Empty"] == "1"
         assert calls == []
 
-        with_body = client.get(
-            _url("co", "2026091900", "tmp", "f024", z, x, y, empty="image")
-        )
+        with_body = client.get(_url("co", "2026091900", "tmp", "f024", z, x, y, empty="image"))
         assert with_body.status_code == 200
         assert Image.open(io.BytesIO(with_body.content)).size == (1, 1)
         assert calls == []

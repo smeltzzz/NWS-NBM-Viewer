@@ -55,9 +55,7 @@ __all__ = [
 ]
 
 Rgba = tuple[int, int, int, int]
-UnitKind = Literal[
-    "temperature", "length", "speed", "energy", "reflectivity", "percent", "index"
-]
+UnitKind = Literal["temperature", "length", "speed", "energy", "reflectivity", "percent", "index"]
 
 TRANSPARENT: Final[Rgba] = (0, 0, 0, 0)
 
@@ -96,9 +94,7 @@ def unit_label(kind: UnitKind, system: str) -> str:
     return _CONVERSIONS[kind][system][0]
 
 
-def convert_units(
-    values: np.ndarray, kind: UnitKind, source: str, target: str
-) -> np.ndarray:
+def convert_units(values: np.ndarray, kind: UnitKind, source: str, target: str) -> np.ndarray:
     """Convert ``values`` of ``kind`` between unit systems.
 
     ``source``/``target`` are system names (``"imperial"`` / ``"metric"``) or
@@ -116,17 +112,11 @@ def convert_units(
     if kind == "temperature":
         # °C -> °F or °F -> °C
         if dst_sys == "imperial":
-            return (np.asarray(values, dtype=np.float32) * 9.0 / 5.0 + 32.0).astype(
-                np.float32
-            )
-        return ((np.asarray(values, dtype=np.float32) - 32.0) * 5.0 / 9.0).astype(
-            np.float32
-        )
+            return (np.asarray(values, dtype=np.float32) * 9.0 / 5.0 + 32.0).astype(np.float32)
+        return ((np.asarray(values, dtype=np.float32) - 32.0) * 5.0 / 9.0).astype(np.float32)
 
     factor = _CONVERSIONS[kind][dst_sys][1] / _CONVERSIONS[kind][src_sys][1]
-    return (np.asarray(values, dtype=np.float32) * np.float32(factor)).astype(
-        np.float32
-    )
+    return (np.asarray(values, dtype=np.float32) * np.float32(factor)).astype(np.float32)
 
 
 def grib_to_colormap_units(values: np.ndarray, kind: UnitKind, grib_unit: str | None):
@@ -285,21 +275,60 @@ _REFLECTIVITY_RGBA: Final[tuple[Rgba, ...]] = (
 
 # ── WPC / NWS National Total Precipitation (NTP) QPF scale ────────────────────
 _PRECIP_BREAKS: Final[tuple[float, ...]] = (
-    0.01, 0.10, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00,
-    2.50, 3.00, 4.00, 5.00, 6.00, 8.00, 10.00, 15.00, 999.0,
+    0.01,
+    0.10,
+    0.25,
+    0.50,
+    0.75,
+    1.00,
+    1.50,
+    2.00,
+    2.50,
+    3.00,
+    4.00,
+    5.00,
+    6.00,
+    8.00,
+    10.00,
+    15.00,
+    999.0,
 )
 _PRECIP_RGBA: Final[tuple[Rgba, ...]] = tuple(
     _hex(c)
     for c in (
-        "cbcb97", "989865", "00ebe7", "00a0f5", "000df5", "00ff00", "00c600",
-        "008e00", "fef700", "e5bc00", "ff8500", "ff0000", "af0000", "640000",
-        "ff00fe", "a152bc",
+        "cbcb97",
+        "989865",
+        "00ebe7",
+        "00a0f5",
+        "000df5",
+        "00ff00",
+        "00c600",
+        "008e00",
+        "fef700",
+        "e5bc00",
+        "ff8500",
+        "ff0000",
+        "af0000",
+        "640000",
+        "ff00fe",
+        "a152bc",
     )
 )
 
 # ── NWS Winter Weather snowfall accumulation ──────────────────────────────────
 _SNOW_BREAKS: Final[tuple[float, ...]] = (
-    0.1, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 18.0, 24.0, 30.0, 48.0,
+    0.1,
+    1.0,
+    2.0,
+    3.0,
+    4.0,
+    6.0,
+    8.0,
+    12.0,
+    18.0,
+    24.0,
+    30.0,
+    48.0,
 )
 _SNOW_RGBA: Final[tuple[Rgba, ...]] = (
     (189, 215, 231, 255),
@@ -323,28 +352,72 @@ _ICE_RGBA: Final[tuple[Rgba, ...]] = tuple(
 
 # ── NWS/SPC wind speed & gust ramp (turquoise -> yellow -> red -> purple) ─────
 _WIND_BREAKS: Final[tuple[float, ...]] = (
-    0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0,
-    45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 80.0, 100.0,
+    0.0,
+    5.0,
+    10.0,
+    15.0,
+    20.0,
+    25.0,
+    30.0,
+    35.0,
+    40.0,
+    45.0,
+    50.0,
+    55.0,
+    60.0,
+    65.0,
+    70.0,
+    80.0,
+    100.0,
 )
 _WIND_RGBA: Final[tuple[Rgba, ...]] = tuple(
     _hex(c)
     for c in (
-        "d8f0f5", "a1e8e0", "4fd8c4", "00c8a0", "7fdc4a", "c8e600", "ffe100",
-        "ffb400", "ff8c00", "ff5a00", "ff2400", "e00000", "c00000", "e000a0",
-        "b000c8", "7800a0", "4b0082",
+        "d8f0f5",
+        "a1e8e0",
+        "4fd8c4",
+        "00c8a0",
+        "7fdc4a",
+        "c8e600",
+        "ffe100",
+        "ffb400",
+        "ff8c00",
+        "ff5a00",
+        "ff2400",
+        "e00000",
+        "c00000",
+        "e000a0",
+        "b000c8",
+        "7800a0",
+        "4b0082",
     )
 )
 
 # ── Diverging wind vector component (U/V) ramp: blue (negative) -> white
 #    (calm) -> red (positive), symmetric about zero in knots. ─────────────────
 _WIND_COMPONENT_BREAKS: Final[tuple[float, ...]] = (
-    -40.0, -20.0, -10.0, -5.0, 0.0, 5.0, 10.0, 20.0, 40.0,
+    -40.0,
+    -20.0,
+    -10.0,
+    -5.0,
+    0.0,
+    5.0,
+    10.0,
+    20.0,
+    40.0,
 )
 _WIND_COMPONENT_RGBA: Final[tuple[Rgba, ...]] = tuple(
     _hex(c)
     for c in (
-        "0d2d8f", "1f60c9", "5aa3e8", "9fd2f2", "f4f7f8",
-        "f5c2a1", "ef8a4c", "d94f1f", "8f140d",
+        "0d2d8f",
+        "1f60c9",
+        "5aa3e8",
+        "9fd2f2",
+        "f4f7f8",
+        "f5c2a1",
+        "ef8a4c",
+        "d94f1f",
+        "8f140d",
     )
 )
 
@@ -354,13 +427,32 @@ _GUST_RGBA: Final[tuple[Rgba, ...]] = _WIND_RGBA + (_hex("2b0050"),)
 
 # ── SPC convective CAPE ───────────────────────────────────────────────────────
 _CAPE_BREAKS: Final[tuple[float, ...]] = (
-    0.0, 100.0, 500.0, 1000.0, 1500.0, 2000.0, 2500.0, 3000.0, 4000.0, 5000.0, 6000.0,
+    0.0,
+    100.0,
+    500.0,
+    1000.0,
+    1500.0,
+    2000.0,
+    2500.0,
+    3000.0,
+    4000.0,
+    5000.0,
+    6000.0,
 )
 _CAPE_RGBA: Final[tuple[Rgba, ...]] = tuple(
     _hex(c)
     for c in (
-        "f2f2f2", "d7d7d7", "c8e6c8", "64c864", "f0f000", "ffa000",
-        "ff6400", "ff0000", "e000a0", "a000c8", "6400a0",
+        "f2f2f2",
+        "d7d7d7",
+        "c8e6c8",
+        "64c864",
+        "f0f000",
+        "ffa000",
+        "ff6400",
+        "ff0000",
+        "e000a0",
+        "a000c8",
+        "6400a0",
     )
 )
 
@@ -556,9 +648,7 @@ def get(name: str) -> Colormap:
     try:
         return COLORMAPS[name]
     except KeyError:
-        raise KeyError(
-            f"unknown colormap {name!r}; available: {', '.join(names())}"
-        ) from None
+        raise KeyError(f"unknown colormap {name!r}; available: {', '.join(names())}") from None
 
 
 # ── Look-up table construction ────────────────────────────────────────────────
@@ -737,9 +827,7 @@ def _map_linear(
 
 
 # ── Legend / interop ──────────────────────────────────────────────────────────
-def legend(
-    name: str, *, units: str = "imperial"
-) -> dict[str, object]:
+def legend(name: str, *, units: str = "imperial") -> dict[str, object]:
     """Legend payload for the frontend, in the requested unit system."""
     cmap = get(name)
     breaks = cmap.breaks_in(units)

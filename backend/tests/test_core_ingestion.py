@@ -7,7 +7,6 @@ import pytest
 from app.api.endpoints.runs import _available_hours
 from app.core.s3_client import S3Client, calculate_byte_ranges, parse_idx
 
-
 REPRESENTATIVE_IDX = """\
 1:0:d=2025010112:TMP:2 m above ground:
 2:1048576:d=2025010112:DPT:2 m above ground:
@@ -86,9 +85,7 @@ class DelayedForecastClient:
 
 @pytest.mark.asyncio
 async def test_missing_forecast_step_is_omitted_not_fatal() -> None:
-    hours = await _available_hours(
-        DelayedForecastClient(), "20250101", 12, "core", "co"
-    )
+    hours = await _available_hours(DelayedForecastClient(), "20250101", 12, "core", "co")
     assert 1 in hours
     assert 3 not in hours
     assert 6 in hours

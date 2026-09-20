@@ -28,6 +28,8 @@ from app.tiles.renderer import RenderedTile, TileRequest, TileRenderer, get_tile
 from app.tiles.source import GridRequest, RenderPlan, get_data_source, render_plan
 
 __all__ = [
+    "EMPTY_TILE_MARKER",
+    "is_empty_marker",
     "Grid",
     "GridCache",
     "GridRequest",

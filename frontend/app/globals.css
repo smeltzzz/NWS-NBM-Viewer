@@ -188,3 +188,41 @@ input[type='range']::-moz-range-thumb {
   border: 1.5px solid rgba(56, 189, 248, 0.7);
   animation: station-pin-pulse 1.6s ease-out infinite;
 }
+
+/* ── Mobile touch hardening (24/7 production UI) ─────────────────────────
+   Goals: pinch-to-zoom on the map and timeline scrubbing never fight the
+   browser (iOS page-zoom / Android pull-to-refresh / double-tap 300 ms).
+   The map canvas gets `touch-action: none` from JS; the rest is CSS.      */
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* No rubber-band scroll chaining off the map or dock on iOS. */
+.maplibregl-map,
+.maplibregl-map canvas {
+  touch-action: none;
+  overscroll-behavior: none;
+}
+
+/* Buttons respond on touchstart (kills the legacy 300 ms tap delay) and
+   small hit-targets stay comfortable: scrubber thumbs are 44 px-ish. */
+button,
+a[role='button'],
+input[type='range'],
+[role='slider'] {
+  touch-action: manipulation;
+}
+
+/* Timeline dock: pin inside the safe area on notched phones. */
+.nbm-timeline-safe-area {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  padding-left: max(0.75rem, env(safe-area-inset-left));
+  padding-right: max(0.75rem, env(safe-area-inset-right));
+}
+
+/* Floating panels should not steal text selection while dragging the map. */
+.nbm-ui-no-select,
+.nbm-ui-no-select * {
+  -webkit-user-select: none;
+  user-select: none;
+}

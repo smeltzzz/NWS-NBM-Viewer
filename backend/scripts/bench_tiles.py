@@ -61,9 +61,17 @@ ELEMENTS = [
 
 # z/x/y triples over CONUS.
 TILES = [
-    (5, 7, 12), (5, 6, 12), (5, 8, 12), (5, 7, 11),
-    (6, 14, 24), (6, 15, 24), (6, 16, 25), (6, 15, 23),
-    (4, 3, 6), (4, 4, 6), (3, 1, 3),
+    (5, 7, 12),
+    (5, 6, 12),
+    (5, 8, 12),
+    (5, 7, 11),
+    (6, 14, 24),
+    (6, 15, 24),
+    (6, 16, 25),
+    (6, 15, 23),
+    (4, 3, 6),
+    (4, 4, 6),
+    (3, 1, 3),
 ]
 
 
@@ -82,8 +90,7 @@ def summarise(label: str, samples: list[float], target: float | None = None) -> 
         return True
     p50, p95, worst = pct(samples, 0.50), pct(samples, 0.95), max(samples)
     line = (
-        f"  {label:<38s} n={len(samples):<4d} "
-        f"p50={p50:7.2f} p95={p95:7.2f} max={worst:7.2f} ms"
+        f"  {label:<38s} n={len(samples):<4d} " f"p50={p50:7.2f} p95={p95:7.2f} max={worst:7.2f} ms"
     )
     ok = True
     if target is not None:
@@ -98,29 +105,49 @@ def summarise(label: str, samples: list[float], target: float | None = None) -> 
 def phase_a(repeats: int) -> None:
     from app.core.s3_client import calculate_byte_ranges, parse_idx
     from app.tiles import colormaps
-    from app.tiles.grib import decode_message, encode_message
+    from app.tiles.grib import decode_message
     from app.tiles.renderer import TileRenderer, encode_webp, tile_bounds_3857
-    from app.tiles.source import SyntheticGribSource, domain_grid, render_plan
+    from app.tiles.source import SyntheticGribSource, domain_grid
 
     print("\n=== Phase A — pipeline stages ===")
     grid = domain_grid("co")
-    print(f"  CONUS native grid: {grid.width}x{grid.height} @ {grid.resolution_m/1000:.2f} km "
-          f"(EPSG:{grid.crs.to_epsg()})")
+    print(
+        f"  CONUS native grid: {grid.width}x{grid.height} @ {grid.resolution_m/1000:.2f} km "
+        f"(EPSG:{grid.crs.to_epsg()})"
+    )
 
     # A1. .idx byte-range resolution — the real parser from app.core.s3_client,
     # fed an index shaped like a real NBM core file (~450 messages).
     index_lines = []
     offset = 0
-    variables = ["TMP", "DPT", "RH", "WIND", "WDIR", "GUST", "CAPE", "REFC",
-                 "APCP", "ASNOW", "ICEACCR", "TCDC", "POP12", "VIS", "HGT"]
-    levels = ["2 m above ground", "10 m above ground", "surface",
-              "entire atmosphere", "0-24 hour acc fcst"]
+    variables = [
+        "TMP",
+        "DPT",
+        "RH",
+        "WIND",
+        "WDIR",
+        "GUST",
+        "CAPE",
+        "REFC",
+        "APCP",
+        "ASNOW",
+        "ICEACCR",
+        "TCDC",
+        "POP12",
+        "VIS",
+        "HGT",
+    ]
+    levels = [
+        "2 m above ground",
+        "10 m above ground",
+        "surface",
+        "entire atmosphere",
+        "0-24 hour acc fcst",
+    ]
     for message in range(1, 451):
         variable = variables[message % len(variables)]
         level = levels[message % len(levels)]
-        index_lines.append(
-            f"{message}:{offset}:d=2026091900:{variable}:{level}:anl:"
-        )
+        index_lines.append(f"{message}:{offset}:d=2026091900:{variable}:{level}:anl:")
         offset += 2_400_000 + (message * 7919) % 900_000
     index_text = "\n".join(index_lines) + "\n"
 
@@ -130,7 +157,8 @@ def phase_a(repeats: int) -> None:
         entries = parse_idx(index_text, file_size=offset + 3_000_000)
         assert entries[-1].byte_range is not None
         target = next(
-            entry for entry in entries
+            entry
+            for entry in entries
             if entry.variable == "TMP" and entry.level == "2 m above ground"
         )
         assert target.byte_range[1] >= target.byte_range[0]
@@ -145,8 +173,10 @@ def phase_a(repeats: int) -> None:
 
     request = GridRequest(domain="co", cycle="2026091900", element="tmp", fhour=24)
     payload = source._message_sync(request)  # noqa: SLF001 - measuring the codec
-    print(f"  GRIB2 message: {len(payload)/1e6:.2f} MB "
-          f"({len(payload)/grid.width/grid.height:.2f} B/point)")
+    print(
+        f"  GRIB2 message: {len(payload)/1e6:.2f} MB "
+        f"({len(payload)/grid.width/grid.height:.2f} B/point)"
+    )
 
     samples = []
     for _ in range(max(3, repeats // 3)):
@@ -183,8 +213,10 @@ def phase_a(repeats: int) -> None:
             blob = encode_webp(tile_rgba, quality=82, lossless=False, method=4)
             samples.append((time.perf_counter() - start) * 1000)
         png_size = _png_size(tile_rgba)
-        print(f"      webp={len(blob)/1024:.1f} KiB vs png={png_size/1024:.1f} KiB "
-              f"({100*(1-len(blob)/png_size):.0f}% smaller)")
+        print(
+            f"      webp={len(blob)/1024:.1f} KiB vs png={png_size/1024:.1f} KiB "
+            f"({100*(1-len(blob)/png_size):.0f}% smaller)"
+        )
         summarise(f"A5  WebP encode {size}x{size} lossy q82", samples)
 
     samples = []
@@ -231,12 +263,16 @@ def warm_layer1(cycle: str) -> None:
     renderer = TileRenderer()
     samples = []
     for index, (element, _ramp) in enumerate(ELEMENTS):
-        request = TileRenderer
         from app.tiles.renderer import TileRequest
 
         req = TileRequest(
-            domain="co", cycle=cycle, element=element, fhour=24 + index,
-            z=5, x=7, y=12,
+            domain="co",
+            cycle=cycle,
+            element=element,
+            fhour=24 + index,
+            z=5,
+            x=7,
+            y=12,
         )
         plan = render_plan(element)
         start = time.perf_counter()
@@ -292,8 +328,10 @@ def phase_bc(tile_count: int) -> tuple[bool, bool]:
                 never_hit += 1
 
     assert never_hit == 0, f"{never_hit} 'warm' requests were layer-2 misses"
-    print(f"  requests: {len(urls)}  empty tiles: {misses}  "
-          f"mean payload: {statistics.fmean(sizes) if sizes else 0:.0f} B")
+    print(
+        f"  requests: {len(urls)}  empty tiles: {misses}  "
+        f"mean payload: {statistics.fmean(sizes) if sizes else 0:.0f} B"
+    )
     cold_ok = summarise("B   cold end-to-end", cold, COLD_TARGET_MS)
     warm_ok = summarise("C   warm end-to-end", warm, WARM_TARGET_MS)
     return cold_ok, warm_ok
@@ -317,10 +355,22 @@ def phase_d(tile_count: int, port: int, cache_dir: Path) -> tuple[bool, bool]:
     env["PORT"] = str(port)
     env["TILE_CACHE_DIR"] = str(cache_dir)
     server = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "main:app",
-         "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
-        cwd=str(BACKEND_DIR), env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
+        ],
+        cwd=str(BACKEND_DIR),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     base = f"http://127.0.0.1:{port}"
     try:
@@ -372,17 +422,25 @@ def phase_d(tile_count: int, port: int, cache_dir: Path) -> tuple[bool, bool]:
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repeats", type=int, default=30,
-                        help="samples per stage in phase A (default 30)")
-    parser.add_argument("--tiles", type=int, default=99,
-                        help="tiles per phase B/C run (default 99)")
-    parser.add_argument("--http", action="store_true",
-                        help="also benchmark over a real uvicorn socket")
+    parser.add_argument(
+        "--repeats", type=int, default=30, help="samples per stage in phase A (default 30)"
+    )
+    parser.add_argument(
+        "--tiles", type=int, default=99, help="tiles per phase B/C run (default 99)"
+    )
+    parser.add_argument(
+        "--http", action="store_true", help="also benchmark over a real uvicorn socket"
+    )
     parser.add_argument("--port", type=int, default=8731)
-    parser.add_argument("--downsample", type=int, default=None,
-                        help="synthetic grid sampling factor (default: full res)")
-    parser.add_argument("--cache-dir", default=None,
-                        help="isolated cache dir (default: a fresh temp dir)")
+    parser.add_argument(
+        "--downsample",
+        type=int,
+        default=None,
+        help="synthetic grid sampling factor (default: full res)",
+    )
+    parser.add_argument(
+        "--cache-dir", default=None, help="isolated cache dir (default: a fresh temp dir)"
+    )
     args = parser.parse_args()
 
     if args.downsample is not None:
@@ -396,14 +454,15 @@ def main() -> int:
     cache_dir.mkdir(parents=True)
     settings.tile_cache_dir = cache_dir
     settings.tile_synthetic_downsample = (
-        args.downsample if args.downsample is not None
-        else settings.tile_synthetic_downsample
+        args.downsample if args.downsample is not None else settings.tile_synthetic_downsample
     )
 
     print(f"python {sys.version.split()[0]}   numpy {np.__version__}")
-    print(f"data source: {settings.tile_data_source}   "
-          f"webp q{settings.tile_webp_quality} method={settings.tile_webp_method}   "
-          f"cache: {cache_dir}")
+    print(
+        f"data source: {settings.tile_data_source}   "
+        f"webp q{settings.tile_webp_quality} method={settings.tile_webp_method}   "
+        f"cache: {cache_dir}"
+    )
 
     phase_a(args.repeats)
     cold_ok, warm_ok = phase_bc(args.tiles)

@@ -10,7 +10,7 @@ build-time taxonomy the UI needs on first paint.
 
 from __future__ import annotations
 
-from app.domains import DOMAINS
+from app.domains import DOMAINS  # noqa: F401  (re-exported for legacy importers)
 from app.logging_config import get_logger
 
 log = get_logger(__name__)
@@ -58,24 +58,45 @@ STATISTICAL_PROCESSES: dict[str, dict[str, str]] = {
     "mean": {"aggregate": "mean", "description": "Ensemble mean"},
     "spread": {"aggregate": "spread", "description": "Ensemble standard deviation"},
     "percentile": {"aggregate": "percentile", "description": "Member percentile (1-99)"},
-    "probability": {"aggregate": "probability", "description": "Exceedance / threshold probability"},
+    "probability": {
+        "aggregate": "probability",
+        "description": "Exceedance / threshold probability",
+    },
 }
 
 # ── Direct percentile families ────────────────────────────────────────────────
 # Explicit percentile variables (1-99) published in the core files.
 PERCENTILE_FAMILIES: dict[str, dict[str, object]] = {
-    "pmaxt": {"units": "degC", "percentiles": list(range(1, 100)),
-              "description": "Max temperature percentiles (1-99, ~171 members)"},
-    "pmint": {"units": "degC", "percentiles": list(range(1, 100)),
-              "description": "Min temperature percentiles (1-99, ~171 members)"},
-    "pqpf06": {"units": "mm", "percentiles": list(range(1, 100)),
-               "description": "6-hour QPF percentiles (1-99)"},
-    "pqpf12": {"units": "mm", "percentiles": list(range(1, 100)),
-               "description": "12-hour QPF percentiles (1-99)"},
-    "pqpf24": {"units": "mm", "percentiles": list(range(1, 100)),
-               "description": "24-hour QPF percentiles (1-99)"},
-    "pmslp": {"units": "Pa", "percentiles": [10, 25, 50, 75, 90],
-              "description": "MSLP percentiles (oceanic)"},
+    "pmaxt": {
+        "units": "degC",
+        "percentiles": list(range(1, 100)),
+        "description": "Max temperature percentiles (1-99, ~171 members)",
+    },
+    "pmint": {
+        "units": "degC",
+        "percentiles": list(range(1, 100)),
+        "description": "Min temperature percentiles (1-99, ~171 members)",
+    },
+    "pqpf06": {
+        "units": "mm",
+        "percentiles": list(range(1, 100)),
+        "description": "6-hour QPF percentiles (1-99)",
+    },
+    "pqpf12": {
+        "units": "mm",
+        "percentiles": list(range(1, 100)),
+        "description": "12-hour QPF percentiles (1-99)",
+    },
+    "pqpf24": {
+        "units": "mm",
+        "percentiles": list(range(1, 100)),
+        "description": "24-hour QPF percentiles (1-99)",
+    },
+    "pmslp": {
+        "units": "Pa",
+        "percentiles": [10, 25, 50, 75, 90],
+        "description": "MSLP percentiles (oceanic)",
+    },
 }
 
 # ── Exceedance / threshold families ───────────────────────────────────────────
@@ -136,8 +157,14 @@ EXCEEDANCE_FAMILIES: dict[str, dict[str, object]] = {
 
 # ── QMD variables ─────────────────────────────────────────────────────────────
 QMD_VARIABLES: dict[str, dict[str, str]] = {
-    "qmd_pop06": {"units": "percent", "description": "Calibrated 6-hour probability of precipitation"},
-    "qmd_pop12": {"units": "percent", "description": "Calibrated 12-hour probability of precipitation"},
+    "qmd_pop06": {
+        "units": "percent",
+        "description": "Calibrated 6-hour probability of precipitation",
+    },
+    "qmd_pop12": {
+        "units": "percent",
+        "description": "Calibrated 12-hour probability of precipitation",
+    },
     "qmd_qpf06": {"units": "mm", "description": "Calibrated 6-hour QPF"},
     "qmd_qpf12": {"units": "mm", "description": "Calibrated 12-hour QPF"},
     "qmd_qpf24": {"units": "mm", "description": "Calibrated 24-hour QPF"},

@@ -1,0 +1,41 @@
+# NWS NBM Viewer — standalone 24/7 cycle poller daemon (OPTIONAL).
+#
+# The API already embeds the poller (see nbm-api.service); enable this unit
+# only when you want the loop on its own host/core — e.g. a fleet of API
+# tasks that should never touch NOAA discovery themselves, or you want the
+# warm-up render burst isolated from request latency.  The poller file lock in
+# TILE_CACHE_DIR keeps exactly ONE process running the loop, so starting this
+# alongside nbm-api is safe: whichever unit grabs the lock owns the jobs and
+# the other idles its scheduler at retention-only work.
+#
+#   sudo cp deploy/systemd/nbm-poller.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now nbm-poller
+
+[Unit]
+Description=NWS NBM Viewer — NOAA active-cycle poller daemon (APScheduler)
+Documentation=https://github.com/smeltzzz/NWS-NBM-Viewer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=nbm
+Group=nbm
+WorkingDirectory=/opt/nbm-viewer/backend
+EnvironmentFile=-/etc/nbm-viewer/nbm.env
+Environment=TILE_CACHE_DIR=/var/lib/nbm-viewer/cache
+Environment=SCHEDULER_ENABLED=true
+Environment=POLLER_ENABLED=true
+ExecStart=/opt/nbm-viewer/backend/.venv/bin/python -m app.cron.poller
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+MemoryMax=2G
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nbm-viewer/cache
+
+[Install]
+WantedBy=multi-user.target

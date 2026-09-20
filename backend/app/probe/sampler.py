@@ -144,12 +144,8 @@ class GridSampler:
             width = height = 0
             transform = Affine.identity()
 
-        to_native = pyproj.Transformer.from_crs(
-            CRS.from_epsg(4326), crs, always_xy=True
-        )
-        to_wgs84 = pyproj.Transformer.from_crs(
-            crs, CRS.from_epsg(4326), always_xy=True
-        )
+        to_native = pyproj.Transformer.from_crs(CRS.from_epsg(4326), crs, always_xy=True)
+        to_wgs84 = pyproj.Transformer.from_crs(crs, CRS.from_epsg(4326), always_xy=True)
         return _DomainProjection(
             code=code,
             crs=crs,
@@ -199,9 +195,7 @@ class GridSampler:
             transform = grid.transform
             height, width = grid.height, grid.width
             # Build a short-lived transformer; cache key includes CRS epsg/proj.
-            transformer = pyproj.Transformer.from_crs(
-                CRS.from_epsg(4326), crs, always_xy=True
-            )
+            transformer = pyproj.Transformer.from_crs(CRS.from_epsg(4326), crs, always_xy=True)
         else:
             proj = self.projection(domain)
             crs = proj.crs
@@ -274,9 +268,7 @@ class GridSampler:
         with self._lock:
             if len(self._index_cache) >= self._index_cache_max:
                 # Drop an arbitrary half to keep inserts cheap.
-                for stale in list(self._index_cache.keys())[
-                    : self._index_cache_max // 2
-                ]:
+                for stale in list(self._index_cache.keys())[: self._index_cache_max // 2]:
                     self._index_cache.pop(stale, None)
             self._index_cache[key] = index
 
@@ -307,14 +299,10 @@ class GridSampler:
         if method == "nearest" or not index.inside:
             r, c = index.row_i, index.col_i
             if not (0 <= r < height and 0 <= c < width):
-                return SampleResult(
-                    value=None, index=index, method="nearest", nodata=True
-                )
+                return SampleResult(value=None, index=index, method="nearest", nodata=True)
             raw = float(values[r, c])
             if _is_nodata(raw):
-                return SampleResult(
-                    value=None, index=index, method="nearest", nodata=True
-                )
+                return SampleResult(value=None, index=index, method="nearest", nodata=True)
             return SampleResult(value=raw, index=index, method="nearest", nodata=False)
 
         # Bilinear: weight the four surrounding cells.
@@ -325,9 +313,7 @@ class GridSampler:
         c1 = c0 + 1
         # Clamp to the valid window; if the point is outside entirely, bail.
         if r0 < -1 or c0 < -1 or r1 > height or c1 > width:
-            return SampleResult(
-                value=None, index=index, method="bilinear", nodata=True
-            )
+            return SampleResult(value=None, index=index, method="bilinear", nodata=True)
 
         dr = row_f - r0
         dc = col_f - c0

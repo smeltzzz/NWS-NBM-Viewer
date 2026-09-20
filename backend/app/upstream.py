@@ -62,9 +62,15 @@ class UpstreamProbe:
     @property
     def targets(self) -> list[tuple[str, str]]:
         """(name, url) pairs. S3 probe uses the anonymous virtual-host style URL."""
+        nodd_base = (
+            f"https://{settings.s3_bucket_grib}.s3.{settings.aws_default_region}.amazonaws.com/"
+        )
         return [
-            ("NODD S3 GRIB", f"https://{settings.s3_bucket_grib}.s3.{settings.aws_default_region}.amazonaws.com/"),
-            ("NODD S3 COG", f"https://{settings.s3_bucket_cog}.s3.{settings.aws_default_region}.amazonaws.com/"),
+            ("NODD S3 GRIB", nodd_base),
+            (
+                "NODD S3 COG",
+                f"https://{settings.s3_bucket_cog}.s3.{settings.aws_default_region}.amazonaws.com/",
+            ),
             ("NOMADS HTTP", f"{settings.nomads_base_url}/"),
         ]
 
@@ -83,7 +89,11 @@ class UpstreamProbe:
             )
 
         with self._lock:
-            if self._cache is not None and not force and self._cache.age_seconds < settings.upstream_probe_cache_seconds:
+            if (
+                self._cache is not None
+                and not force
+                and self._cache.age_seconds < settings.upstream_probe_cache_seconds
+            ):
                 return self._cache
 
         # Probe outside the lock so concurrent health checks don't block each
@@ -118,13 +128,9 @@ class UpstreamProbe:
                 latency_ms=round((time.monotonic() - started) * 1000, 1),
             )
         except httpx.HTTPError as exc:  # Timeout, connect, SSL, 4xx, etc.
-            return UpstreamStatus(
-                name=name, reachable=False, error=f"{type(exc).__name__}: {exc}"
-            )
+            return UpstreamStatus(name=name, reachable=False, error=f"{type(exc).__name__}: {exc}")
         except Exception as exc:  # noqa: BLE001 — a probe must never raise
-            return UpstreamStatus(
-                name=name, reachable=False, error=f"{type(exc).__name__}: {exc}"
-            )
+            return UpstreamStatus(name=name, reachable=False, error=f"{type(exc).__name__}: {exc}")
 
 
 _probe_singleton: UpstreamProbe | None = None

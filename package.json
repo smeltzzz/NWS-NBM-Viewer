@@ -25,7 +25,13 @@
     "setup": "npm install && npm run setup:backend",
     "docker:up": "docker compose up --build",
     "docker:down": "docker compose down --remove-orphans",
-    "docker:logs": "docker compose logs -f --tail=100"
+    "docker:logs": "docker compose logs -f --tail=100",
+    "docker:prod:up": "docker compose -f docker-compose.prod.yml up -d --build",
+    "docker:prod:down": "docker compose -f docker-compose.prod.yml down",
+    "lint:backend": "cd backend && sh -c 'if [ -x .venv/bin/flake8 ]; then .venv/bin/flake8 .; else flake8 .; fi'",
+    "format:backend": "cd backend && sh -c 'if [ -x .venv/bin/black ]; then .venv/bin/black .; else black .; fi'",
+    "verify": "npm run typecheck && npm run lint && npm run test:backend",
+    "verify:timeline": "npm run verify:timeline --workspace frontend"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

@@ -1,0 +1,63 @@
+{
+  "family": "nbm-viewer-backend",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "3072",
+  "runtimePlatform": { "cpuArchitecture": "X86_64", "operatingSystemFamily": "LINUX" },
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/nbm-viewer-task",
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/nbm-viewer/backend:prod",
+      "essential": true,
+      "portMappings": [{ "containerPort": 8000, "protocol": "tcp" }],
+      "environment": [
+        { "name": "ENVIRONMENT", "value": "production" },
+        { "name": "WEB_CONCURRENCY", "value": "2" },
+        { "name": "TILE_CACHE_DIR", "value": "/data/tilecache" },
+        { "name": "SCHEDULER_ENABLED", "value": "true" },
+        { "name": "POLLER_ENABLED", "value": "true" },
+        { "name": "POLLER_INTERVAL_MINUTES", "value": "10" },
+        { "name": "CACHE_MAX_AGE_HOURS", "value": "72" },
+        { "name": "CACHE_EVICTION_MINUTES", "value": "60" },
+        { "name": "CACHE_BACKEND", "value": "redis" }
+      ],
+      "secrets": [
+        {
+          "name": "REDIS_URL",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:nbm-viewer/redis-url"
+        }
+      ],
+      "mountPoints": [
+        { "sourceVolume": "tilecache", "containerPath": "/data/tilecache", "readOnly": false }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health/live || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 20
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/nbm-viewer",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "backend"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "tilecache",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0123456789abcdef0",
+        "transitEncryption": "ENABLED",
+        "authorizedAccessPointId": "nbm-tilecache"
+      }
+    }
+  ]
+}

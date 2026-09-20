@@ -86,9 +86,7 @@ class Grid:
     @property
     def bounds(self) -> tuple[float, float, float, float]:
         """``(left, bottom, right, top)`` in the native CRS."""
-        return rasterio.transform.array_bounds(
-            self.height, self.width, self.transform
-        )
+        return rasterio.transform.array_bounds(self.height, self.width, self.transform)
 
     @property
     def nbytes(self) -> int:
@@ -164,9 +162,7 @@ def decode_message(payload: bytes, *, band: int = 1) -> Grid:
                 if src.count < 1:
                     raise GribDecodeError("GRIB2 message contains no bands")
                 if band > src.count:
-                    raise GribDecodeError(
-                        f"requested band {band} of {src.count} in GRIB2 message"
-                    )
+                    raise GribDecodeError(f"requested band {band} of {src.count} in GRIB2 message")
                 values = src.read(band)
                 tags = src.tags(band)
                 profile_crs = src.crs

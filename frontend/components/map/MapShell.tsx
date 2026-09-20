@@ -24,9 +24,13 @@ import { ProductSelector } from '@/components/controls/ProductSelector';
 import { Legend as NewLegend } from '@/components/controls/Legend';
 import { CATEGORIES, getProductById, type NBMProductDef, type ProductType, type Accumulation, type Percentile } from '@/components/controls/catalog';
 
+import { ErrorBoundary } from '@/components/common/ErrorBoundary';
+import { useToast } from '@/components/common/ToastProvider';
+
 import { PlaybackControls, TimelineBar, canonicalForecastHours, frameTileUrls, useTimeline } from '@timeline/index';
 
 import { MapContainer, type MapHandle } from '@/components/map/MapContainer';
+import { TileErrorWatcher } from '@/components/map/TileErrorWatcher';
 import { OverlayControls } from '@/components/map/OverlayControls';
 import { ProbeReadout } from '@/components/map/ProbeReadout';
 import { StatusBadge } from '@/components/map/StatusBadge';
@@ -38,7 +42,9 @@ import { WindParticleLayer, type WindLayerMode } from '@/src/components/map/Wind
 import { StationMarker } from '@/src/components/map/StationMarker';
 import { StationPicker, type StationPick } from '@/src/components/map/StationPicker';
 
-const RUN_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
+// Align the client poll with the backend poller cadence (10 min); the edge
+// gateway micro-caches /runs for 15 s, so this stays cheap at scale.
+const RUN_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 /** Elements rendered by the wind overlay modes (particles / barbs). */
 const WIND_FAMILY = new Set(['wind', 'wdir', 'gust']);
@@ -110,6 +116,10 @@ export function MapShell({
 
   // ── Station meteogram (map click → pinpoint marker + drawer) ────────────
   const [station, setStation] = useState<StationPick | null>(null);
+
+  // Toast plumbing for run-feed notices + panel boundaries.
+  const toast = useToast();
+  const lastFeedNotice = useRef<string | null>(null);
 
   // Product catalog state
   const [selectedProductId, setSelectedProductId] = useState<string>(() => {
@@ -207,7 +217,7 @@ export function MapShell({
 
   const closeMeteogram = useCallback(() => setStation(null), []);
 
-  // ── Latest-run discovery ────────────────────────────────────────────────
+  // ── Latest-run discovery (drives the header badge + timeline hours) ──────
   useEffect(() => {
     let cancelled = false;
 
@@ -242,14 +252,53 @@ export function MapShell({
             setAvailableHours(canonicalForecastHours());
           }
 
-          // Run status: if latest cycle is recent, mark ingesting
+          // Run status: prefer the poller pointer (authoritative), else the
+          // age heuristic. `ingesting` = NOAA still posting hours of this
+          // cycle; `stale/degraded` = delayed feed announced via a toast.
+          const pointer = run.pointer;
           const ageMin = (Date.now() - base.getTime()) / 60000;
-          if (ageMin < 45) {
+          if (pointer?.state === 'ingesting' || (pointer == null && ageMin < 45)) {
             setRunStatus('ingesting');
-            setIngestionProgress(Math.min(95, Math.max(20, Math.round(100 - ageMin))));
+            const warm = pointer?.warmup;
+            setIngestionProgress(
+              warm && warm.total > 0
+                ? Math.min(95, Math.round(((warm.rendered + warm.cached_hits) / warm.total) * 100))
+                : Math.min(95, Math.max(20, Math.round(100 - ageMin))),
+            );
           } else {
             setRunStatus('complete');
             setIngestionProgress(undefined);
+          }
+
+          // Announce operational conditions once per transition (not per poll).
+          const notice =
+            pointer?.degraded || pointer?.upstream_error
+              ? {
+                  tone: 'warning' as const,
+                  title: 'NOAA feed unreachable',
+                  message: `Live cycle discovery failed; the viewer is serving the last confirmed run (${cycleStr}) until NODD responds.`,
+                }
+              : pointer?.stale
+                ? {
+                    tone: 'info' as const,
+                    title: 'Cycle update delayed',
+                    message: `NOAA has not published a newer cycle than ${cycleStr}. The viewer will switch automatically when it lands.`,
+                  }
+                : null;
+          if (notice) {
+            if (lastFeedNotice.current !== cycleStr) {
+              lastFeedNotice.current = cycleStr;
+              toast.push({ key: 'run-feed', ttlMs: 11_000, ...notice });
+            }
+          } else if (lastFeedNotice.current) {
+            lastFeedNotice.current = null;
+            toast.push({
+              key: 'run-feed',
+              tone: 'success',
+              title: 'Feed current',
+              message: `Latest NBM cycle ${cycleStr} is now up to date.`,
+              ttlMs: 5_000,
+            });
           }
         }
       } catch {
@@ -263,11 +312,17 @@ export function MapShell({
 
     void loadRun();
     const timer = setInterval(() => void loadRun(), RUN_REFRESH_INTERVAL_MS);
+    // Come back to a foreground tab → immediate refresh (mobile tab restore).
+    const onVisible = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') void loadRun();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [domain, product]);
+  }, [domain, product, toast]);
 
   const handleToggle = useCallback((key: keyof OverlayToggles) => {
     setToggles((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -331,6 +386,7 @@ export function MapShell({
       {/* Main content: sidebar + map */}
       <div className="relative flex flex-1 overflow-hidden">
         {/* Product Selector - Desktop sidebar / Mobile bottom sheet */}
+        <ErrorBoundary label="Product catalog" resetKey={selectedProductId} className="m-4">
         <ProductSelector
           selectedProductId={selectedProductId}
           onSelectProduct={handleSelectProduct}
@@ -348,10 +404,15 @@ export function MapShell({
           isMobileSheet={isMobile}
           className={isMobile ? '' : 'top-0'}
         />
+        </ErrorBoundary>
 
         {/* Map area */}
         <div className={`relative flex-1 ${!isMobile && sidebarOpen ? 'ml-[340px]' : 'ml-0'} transition-all duration-300`}>
+          <ErrorBoundary label="Map" resetKey={domain} className="pointer-events-auto absolute inset-6 z-10">
           <MapContainer ref={mapHandleRef} domain={domain} className="absolute inset-0">
+            {/* Turns per-tile HTTP failures (unpublished probabilistic hours,
+                throttled upstreams) into one friendly toast. */}
+            <TileErrorWatcher />
             <WeatherRasterLayer
               domain={domain}
               cycle={cycle}
@@ -381,8 +442,10 @@ export function MapShell({
             <StationPicker onPick={handleStationPick} />
             <StationMarker station={station} onDragEnd={handleStationDrag} />
           </MapContainer>
+          </ErrorBoundary>
 
           {/* Temporal navigation dock — scrub bar + transport controls */}
+          <ErrorBoundary label="Timeline" resetKey={`${cycle}|${variable}`} className="absolute inset-x-4 bottom-4 z-20">
           <TimelineBar
             hours={availableHours}
             cycle={cycle}
@@ -409,6 +472,7 @@ export function MapShell({
               onLoopModeChange={timeline.setLoopMode}
             />
           </TimelineBar>
+          </ErrorBoundary>
 
           {/* Overlay controls - desktop left bottom (above the timeline dock) */}
           <div className="pointer-events-none absolute bottom-[112px] left-4 z-20 hidden lg:block">
@@ -426,6 +490,7 @@ export function MapShell({
 
           {/* Legend - floating (above the timeline dock) */}
           <div className="pointer-events-none absolute bottom-[112px] right-4 z-20 flex flex-col items-end gap-2">
+          <ErrorBoundary label="Legend" resetKey={variable} className="pointer-events-auto max-w-[420px]">
             <NewLegend
               product={activeProductDef}
               variable={variable}
@@ -439,6 +504,7 @@ export function MapShell({
               onHoverValue={setHoveredValue}
               orientation={isMobile ? 'horizontal' : 'horizontal'}
             />
+          </ErrorBoundary>
           </div>
 
           {/* Status badge - top right over map */}
@@ -464,6 +530,7 @@ export function MapShell({
 
       {/* Station meteogram drawer — hover scrubs the map timeline. */}
       {station && (
+        <ErrorBoundary label="Station meteogram" resetKey={`${station.lat.toFixed(3)},${station.lon.toFixed(3)}`} className="absolute inset-0 z-[60] flex items-center justify-center">
         <MeteogramModal
           lat={station.lat}
           lon={station.lon}
@@ -474,6 +541,7 @@ export function MapShell({
           onScrub={(hour) => timeline.seekHour(hour)}
           onClose={closeMeteogram}
         />
+        </ErrorBoundary>
       )}
     </div>
   );

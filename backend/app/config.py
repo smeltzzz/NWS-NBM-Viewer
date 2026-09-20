@@ -30,9 +30,7 @@ REPO_ROOT = BACKEND_DIR.parent
 Environment = Literal["development", "staging", "production", "test"]
 NbmProduct = Literal["core", "qmd"]
 NbmDomain = Literal["co", "ak", "hi", "pr", "gu", "oc"]
-Resampling = Literal[
-    "nearest", "bilinear", "cubic", "cubic_spline", "lanczos", "average", "mode"
-]
+Resampling = Literal["nearest", "bilinear", "cubic", "cubic_spline", "lanczos", "average", "mode"]
 
 
 def _split_csv(value: str) -> list[str]:
@@ -175,6 +173,61 @@ class Settings(BaseSettings):
     inventory_refresh_minutes: int = Field(default=15, ge=1)
     cache_warmup_on_start: bool = False
 
+    # ── Active-cycle poller (app.cron.poller) ───────────────────────────────
+    #: Runs under the scheduler (``scheduler_enabled``) in exactly one worker
+    #: (advisory file lock) — duplicate schedulers in every worker would
+    #: multiply NOAA HEAD traffic for no benefit.
+    poller_enabled: bool = True
+    #: NOAA publishes each hour at ~:25-:50 past; 10 min catches it promptly
+    #: without becoming a bad citizen on the public bucket.
+    poller_interval_minutes: int = Field(default=10, ge=1, le=60)
+    poller_lookback_hours: int = Field(default=24, ge=1, le=72)
+    #: In-flight HEAD/idx probes during discovery (S3-friendly ceiling).
+    poller_probe_concurrency: int = Field(default=12, ge=1, le=64)
+    #: Hours f001..fNNN that must all exist before a cycle is "complete".
+    poller_complete_window_hours: int = Field(default=36, ge=1, le=264)
+    #: An hour-old pointer with no update in this many minutes is flagged
+    #: ``stale`` so clients can surface "NOAA is behind" instead of silently
+    #: rendering an old forecast.
+    poller_stale_after_minutes: int = Field(default=90, ge=15, le=720)
+    #: Exponential backoff applied to polling after S3 throttle / network
+    #: failures: base * 2**(failures-1), capped, plus jitter.
+    poller_backoff_base_seconds: float = Field(default=60.0, ge=5)
+    poller_backoff_max_seconds: float = Field(default=900.0, ge=10)
+    #: ``/runs/latest`` trusts the pointer while its age is below this; older
+    #: reads fall back to live discovery (self-healing if the poller died).
+    pointer_freshness_seconds: int = Field(default=1200, ge=60, le=86400)
+    #: Expose ``GET /api/v1/poller/status`` + ``POST /api/v1/poller/poll``.
+    poller_ops_endpoints_enabled: bool = True
+
+    # ── Warm-up (root tiles for key national products) ─────────────────────
+    poller_warmup_enabled: bool = True
+    #: Root zooms that cover the CONUS view in a handful of tiles.
+    poller_warmup_zooms: str = "3,4,5"
+    #: 2m Temp, 6 hr QPF, Max/Min Temp, Wind Gusts — the first paints users do.
+    poller_warmup_elements: str = "tmp,qpf_6h,max,min,gust"
+    #: Hours of each product warmed (13 covers the hourly f001-f036 window;
+    #: 24/36 the common "today/tonight" outlooks).
+    poller_warmup_hours: str = "1,3,6,12,18,24,36"
+    #: Concurrent renders; deliberately small — warm-up is background work.
+    poller_warmup_concurrency: int = Field(default=3, ge=1, le=16)
+
+    # ── Disk-cache retention ────────────────────────────────────────────────
+    #: Tiles (and S3 sidecar fragments) older than this are evicted from disk
+    #: by the hourly retention sweep, bounding ``TILE_CACHE_DIR`` growth.
+    cache_max_age_hours: int = Field(default=72, ge=1, le=720)
+    cache_eviction_minutes: int = Field(default=60, ge=5, le=1440)
+
+    # ── Transient upstream errors (S3 throttling, NOAA 5xx) ───────────────
+    #: Retries for retryable failures (429/500/502/503/504, timeouts). The
+    #: delay honours ``Retry-After`` and otherwise backs off exponentially.
+    s3_retry_max_attempts: int = Field(default=3, ge=1, le=8)
+    s3_retry_base_delay_seconds: float = Field(default=0.5, ge=0.0, le=30)
+    s3_retry_max_delay_seconds: float = Field(default=8.0, ge=0.1, le=120)
+    #: While a throttle is cooling, cheap probes answer "unknown" instantly
+    #: instead of poking S3 again (seconds).
+    s3_throttle_cooldown_seconds: float = Field(default=30.0, ge=1)
+
     # ── Validators ─────────────────────────────────────────────────────────
     @field_validator("api_prefix")
     @classmethod
@@ -239,6 +292,23 @@ class Settings(BaseSettings):
     @property
     def colormap_list(self) -> list[str]:
         return _split_csv(self.colormaps_default)
+
+    # ── Poller derived lists ───────────────────────────────────────────────
+    @property
+    def poller_warmup_zoom_list(self) -> list[int]:
+        return sorted({int(z) for z in _split_csv(self.poller_warmup_zooms) if z.isdigit()})
+
+    @property
+    def poller_warmup_element_list(self) -> list[str]:
+        return _split_csv(self.poller_warmup_elements)
+
+    @property
+    def poller_warmup_hour_list(self) -> list[int]:
+        return sorted({int(h) for h in _split_csv(self.poller_warmup_hours) if h.isdigit()})
+
+    @property
+    def cache_max_age_seconds(self) -> int:
+        return self.cache_max_age_hours * 3600
 
     @property
     def s3_grib_uri(self) -> str:

@@ -16,7 +16,6 @@ from contextlib import contextmanager
 from typing import Iterator
 
 import numpy as np
-import rasterio
 from rasterio.io import MemoryFile
 from rasterio.profiles import Profile
 from rasterio.transform import from_bounds

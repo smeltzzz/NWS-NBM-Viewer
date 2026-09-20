@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'arena/**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Backend: Black + Flake8 + pytest (FastAPI, poller, tile pipeline)
+  # ──────────────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend (black, flake8, pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "black>=24.10" "flake8>=7.1"
+
+      - name: Black (format check)
+        run: black --check .
+
+      - name: Flake8 (lint)
+        run: flake8 .
+
+      - name: Pytest
+        run: python -m pytest -q
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Frontend: typecheck + ESLint + production build + timeline leak audit
+  # ──────────────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (tsc, eslint, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install (workspace root)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck --workspace frontend
+
+      - name: ESLint
+        run: npm run lint --workspace frontend -- --max-warnings=0
+
+      - name: Production build
+        run: npm run build --workspace frontend
+
+      - name: Timeline leak audit (headless)
+        run: npm run verify:timeline --workspace frontend
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Infrastructure: gateway image (compiles ngx_brotli + `nginx -t`) and
+  # compose file validation for both the dev and prod stacks.
+  # ──────────────────────────────────────────────────────────────────────────
+  infra:
+    name: Gateway & Compose (nginx -t)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build gateway image (runs nginx -t as part of the build)
+        run: |
+          set -o pipefail
+          # Pre-pull the base with retries: Docker Hub throttles anonymous
+          # pulls from shared runner IPs; a warm cache then makes the build
+          # itself immune to that burst limiting.
+          for attempt in 1 2 3; do
+            docker pull nginx:1.27-alpine && break
+            [ "$attempt" = 3 ] && exit 1
+            echo "base pull failed (attempt $attempt) — retrying in 15s"; sleep 15
+          done
+          if ! docker build --pull=false --progress=plain -t nbm-gateway:ci \
+                 -f docker/nginx.Dockerfile . 2>&1 | tee /tmp/build.log; then
+            # Echo the failure into the job's annotations so it is readable
+            # without opening the raw logs (newlines URL-escaped for ::error::).
+            # Annotations are size-capped — show the first real error with
+            # context, then the build's dying lines.
+            {
+              grep -B2 -A8 -m1 -E "error:|Error [0-9]+|CMake Error|undefined reference|cannot find|No such file|emerg|unknown directive" /tmp/build.log || true
+              echo '--- tail ---'
+              tail -12 /tmp/build.log
+            } | tr -d '\r' | sed 's|%|%25|g; s|:|%3A|g' | paste -sd '%0A' - | { read -r ERR || true; echo "::error::${ERR:0:3500}" || true; }
+            { echo '### Gateway build failure (last 60 lines)'; echo '```'; tail -60 /tmp/build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Validate gateway boot (with stub upstreams)
+        run: |
+          # `-t` config check outside the build (cheap re-proof in CI).
+          # Upstream service names resolve via /etc/hosts stubs here.
+          docker run --rm --entrypoint nginx \
+            --add-host backend:127.0.0.1 --add-host frontend:127.0.0.1 \
+            nbm-gateway:ci -t
+          CID=$(docker run -d \
+            --add-host backend:127.0.0.1 --add-host frontend:127.0.0.1 \
+            nbm-gateway:ci)
+          trap "docker logs $CID 2>&1 | tail -40; docker rm -f $CID >/dev/null" EXIT
+          sleep 3
+          if [ "$(docker inspect -f '{{.State.Running}}' "$CID")" = true ]; then
+            # /healthz must answer directly, without any upstream.
+            docker exec "$CID" wget -qO- http://127.0.0.1/healthz | grep -q ok
+            echo "gateway boots and /healthz answers"
+          else
+            echo "gateway exited at boot: $(docker inspect -f '{{.State.ExitCode}}' "$CID")"
+            exit 1
+          fi
+
+      - name: Validate docker-compose.yml
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: Validate docker-compose.prod.yml
+        run: docker compose -f docker-compose.prod.yml config --quiet
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Optional (on main): build & push backend image — proof the production
+  # Dockerfile target works end to end. Enable pushes by adding registry
+  # secrets; by default this only builds.
+  # ──────────────────────────────────────────────────────────────────────────
+  images:
+    name: Docker prod targets build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend prod image
+        run: docker build -t nbm-backend:ci --target prod -f docker/backend.Dockerfile backend
+
+      - name: Build frontend prod image
+        run: docker build -t nbm-frontend:ci --target prod -f docker/frontend.Dockerfile frontend

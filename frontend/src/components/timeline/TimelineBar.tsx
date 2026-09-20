@@ -186,10 +186,10 @@ export function TimelineBar({
   }, [cycle, tooltipHour]);
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center p-2 pb-3">
+    <div className="nbm-timeline-safe-area pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center p-2 pb-3">
       <section
         aria-label="Forecast timeline"
-        className="pointer-events-auto w-full max-w-[900px] rounded-2xl border border-white/10 bg-[#0c1424]/95 px-3 pb-1.5 pt-2 shadow-[0_12px_36px_rgba(0,0,0,0.6)] backdrop-blur-xl"
+        className="nbm-ui-no-select pointer-events-auto w-full max-w-[900px] rounded-2xl border border-white/10 bg-[#0c1424]/95 px-3 pb-1.5 pt-2 shadow-[0_12px_36px_rgba(0,0,0,0.6)] backdrop-blur-xl"
       >
         {/* Indeterminate buffering hairline */}
         <div className="relative -mx-3 -mt-2 mb-1.5 h-0.5 overflow-hidden rounded-t-2xl bg-transparent">

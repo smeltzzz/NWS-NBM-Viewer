@@ -8,8 +8,12 @@ DiskCache so a map request does not repeatedly spend bandwidth on NOAA data.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
+import random
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -18,6 +22,9 @@ import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.config import settings
+from app.services.retention import cap_ttl, evict_diskcache_older_than
+
+log = logging.getLogger(__name__)
 
 try:  # botocore is already a runtime dependency; retain a clear unsigned config.
     from botocore import UNSIGNED
@@ -55,12 +62,60 @@ ForecastNotAvailable = S3ObjectNotFound
 class S3HTTPError(S3ClientError):
     """A non-404 HTTP error from the public bucket."""
 
-    def __init__(self, status: int, url: str, detail: str = "") -> None:
+    def __init__(
+        self,
+        status: int,
+        url: str,
+        detail: str = "",
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status = status
         self.url = url
         self.detail = detail
+        self.headers = headers or {}
         suffix = f": {detail}" if detail else ""
         super().__init__(f"S3 HTTP {status} for {url}{suffix}")
+
+
+#: Statuses that mean "the bucket is unhappy right now", not "the object is
+#: missing" — S3 answers 503 SlowDown / 429 when an anonymous consumer
+#: exceeds its request rate, and proxies emit 500/502/504 on NOAA hiccups.
+RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+class S3Throttled(S3HTTPError):
+    """Upstream is rate-limiting or unhealthy.
+
+    Raised once the bounded retry loop is exhausted.  Callers distinguish:
+
+    * ``S3ObjectNotFound`` → the object is genuinely not published (normal —
+      a delayed forecast hour),
+    * ``S3Throttled``      → *unknown*; probes must keep the previous answer
+      and the poller applies exponential backoff instead of concluding NOAA
+      has nothing new.
+    """
+
+    def __init__(
+        self, status: int, url: str, detail: str = "", retry_after: float | None = None
+    ) -> None:
+        super().__init__(status, url, detail)
+        self.retry_after = retry_after
+
+
+#: ``Retry-After`` is honoured as asked — up to a sane ceiling, because
+#: waiting less than the server requested re-triggers the rate limit and
+#: waiting forever would stall the request path.
+RETRY_AFTER_CAP_SECONDS = 60.0
+
+
+def _parse_retry_after(error: S3HTTPError) -> float | None:
+    """Extract a sane ``Retry-After`` hint (delta-seconds only, bounded)."""
+    headers = getattr(error, "headers", None) or {}
+    raw = headers.get("Retry-After") or headers.get("retry-after") or ""
+    match = re.fullmatch(r"\s*(\d+)\s*", str(raw))
+    if not match:
+        return None
+    return min(float(match.group(1)), RETRY_AFTER_CAP_SECONDS)
 
 
 class IdxParseError(S3ClientError, ValueError):
@@ -259,7 +314,9 @@ def parse_idx(index_text: str | bytes, file_size: int | None = None) -> list[Idx
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        message_num, byte_start, date, variable, level, forecast_step = _parse_idx_parts(line, line_number)
+        message_num, byte_start, date, variable, level, forecast_step = _parse_idx_parts(
+            line, line_number
+        )
         entries.append(
             IdxEntry(
                 message_num=message_num,
@@ -291,12 +348,20 @@ class S3Client:
         self.bucket = bucket
         self.key_template = key_template
         self.timeout_seconds = timeout_seconds or max(
-            settings.s3_connect_timeout_seconds, settings.s3_read_timeout_seconds, DEFAULT_TIMEOUT_SECONDS
+            settings.s3_connect_timeout_seconds,
+            settings.s3_read_timeout_seconds,
+            DEFAULT_TIMEOUT_SECONDS,
         )
         self.max_connections = max_connections or settings.s3_max_pool_connections
         self._session: aiohttp.ClientSession | None = None
         self._owns_cache = cache is None
-        self._cache = cache or self._make_cache(cache_dir)
+        # NB: `cache or _make_cache(...)` would silently discard a passed-in
+        # *empty* cache — diskcache's Cache implements __len__ and is falsy
+        # with zero entries.  Compare against None explicitly.
+        self._cache = cache if cache is not None else self._make_cache(cache_dir)
+        # Monotonic instant until which cheap probes answer "unknown" because
+        # the bucket rate-limited us (graceful-degradation back-off).
+        self._throttle_until = 0.0
         # Exposed for callers/tests wanting to assert public unsigned mode. The
         # aiohttp path itself never adds Authorization headers.
         self.botocore_config = ANONYMOUS_S3_CONFIG
@@ -329,15 +394,38 @@ class S3Client:
         if self._cache is None:
             return
         try:
-            self._cache.set(key, value, expire=ttl, retry=True)
+            # Bound every sidecar/fragment to the retention window so the S3
+            # cache dir cannot grow without limit on 24/7 hosts.
+            self._cache.set(
+                key, value, expire=cap_ttl(ttl, settings.cache_max_age_seconds), retry=True
+            )
         except Exception:
             # A cache outage must never make public data unavailable.
             return
 
+    def purge_expired(self) -> dict[str, Any]:
+        """Age-sweep the sidecar cache (called by the retention job)."""
+        if self._cache is None:
+            return {"removed": 0}
+        try:
+            report = evict_diskcache_older_than(self._cache, settings.cache_max_age_seconds)
+            return report.as_dict()
+        except Exception as exc:  # noqa: BLE001
+            return {"removed": 0, "error": f"{type(exc).__name__}: {exc}"}
+
+    def throttle_state(self) -> dict[str, Any]:
+        """Snapshot of the degradation back-off, for status/health endpoints."""
+        remaining = self._throttle_until - time.monotonic()
+        return {
+            "throttled": remaining > 0,
+            "cooldown_remaining_seconds": round(max(0.0, remaining), 1),
+            "retry_max_attempts": settings.s3_retry_max_attempts,
+            "retry_base_delay_seconds": settings.s3_retry_base_delay_seconds,
+            "retry_max_delay_seconds": settings.s3_retry_max_delay_seconds,
+        }
+
     def grib_key(self, date_str: str, cycle: int, file_type: str, fhour: int, domain: str) -> str:
-        return build_grib_key(
-            date_str, cycle, file_type, fhour, domain, template=self.key_template
-        )
+        return build_grib_key(date_str, cycle, file_type, fhour, domain, template=self.key_template)
 
     def idx_key(self, date_str: str, cycle: int, file_type: str, fhour: int, domain: str) -> str:
         return f"{self.grib_key(date_str, cycle, file_type, fhour, domain)}.idx"
@@ -361,7 +449,79 @@ class S3Client:
             self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
         return self._session
 
-    async def _request(self, method: str, url: str, headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
+    # ── Throttle state ──────────────────────────────────────────────────────
+    @property
+    def throttled(self) -> bool:
+        """True while a transient-outage cooldown is active."""
+        return time.monotonic() < self._throttle_until
+
+    def _note_throttle(self, seconds: float | None = None) -> None:
+        cooldown = seconds if seconds is not None else settings.s3_throttle_cooldown_seconds
+        self._throttle_until = max(self._throttle_until, time.monotonic() + cooldown)
+
+    async def _request(
+        self, method: str, url: str, headers: dict[str, str] | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
+        """One S3 request with bounded, jittered retries for transient errors.
+
+        * ``404``        → :class:`S3ObjectNotFound`, immediately (terminal).
+        * ``429/500/...``→ retried up to ``S3_RETRY_MAX_ATTEMPTS`` with
+          exponential backoff honouring ``Retry-After``; when exhausted,
+          :class:`S3Throttled` opens a cooldown so cheap probes answer
+          "unknown" instead of hammering the bucket (graceful degradation for
+          NODD rate limits).
+        * network errors → same path as retryable statuses.
+        """
+        attempts = max(1, int(settings.s3_retry_max_attempts))
+        delay = max(0.0, float(settings.s3_retry_base_delay_seconds))
+        max_delay = max(delay, float(settings.s3_retry_max_delay_seconds))
+
+        for attempt in range(attempts):
+            try:
+                return await self._request_once(method, url, headers)
+            except S3ObjectNotFound:
+                raise
+            except S3HTTPError as exc:
+                if exc.status not in RETRYABLE_STATUSES:
+                    raise
+                if attempt + 1 >= attempts:
+                    self._note_throttle()
+                    raise S3Throttled(
+                        exc.status, exc.url, exc.detail, retry_after=_parse_retry_after(exc)
+                    ) from exc
+                wait = _parse_retry_after(exc)
+                log.warning(
+                    "S3 %s %s → HTTP %s; retry %d/%d in %.2fs",
+                    method,
+                    url.rsplit("/", 1)[-1],
+                    exc.status,
+                    attempt + 1,
+                    attempts - 1,
+                    wait if wait is not None else -1,
+                )
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                if attempt + 1 >= attempts:
+                    self._note_throttle()
+                    raise S3Throttled(0, url, f"{type(exc).__name__}: {exc}") from exc
+                wait = None
+                log.warning(
+                    "S3 %s %s → %s; retry %d/%d",
+                    method,
+                    url.rsplit("/", 1)[-1],
+                    type(exc).__name__,
+                    attempt + 1,
+                    attempts - 1,
+                )
+            if wait is None:
+                wait = min(max_delay, delay * (2**attempt)) + random.uniform(0, delay)
+            await asyncio.sleep(max(0.0, float(wait)))
+
+        # Unreachable: the loop raises or returns on every path.
+        raise S3Throttled(0, url, "retry loop exhausted")
+
+    async def _request_once(
+        self, method: str, url: str, headers: dict[str, str] | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
         session = await self._get_session()
         async with session.request(method, url, headers=headers or {}) as response:
             body = await response.read()
@@ -370,7 +530,7 @@ class S3Client:
                 raise S3ObjectNotFound(url, response.status)
             if response.status < 200 or response.status >= 300:
                 detail = body[:200].decode("utf-8", errors="replace")
-                raise S3HTTPError(response.status, url, detail)
+                raise S3HTTPError(response.status, url, detail, headers=response_headers)
             return response.status, response_headers, body
 
     async def _head_size(self, s3_key: str) -> int | None:
@@ -387,7 +547,9 @@ class S3Client:
                 _status, range_headers, _body = await self._request(
                     "GET", url, headers={"Range": "bytes=0-0"}
                 )
-                content_range = range_headers.get("Content-Range") or range_headers.get("content-range", "")
+                content_range = range_headers.get("Content-Range") or range_headers.get(
+                    "content-range", ""
+                )
                 match = re.search(r"/([0-9]+)$", content_range)
                 if match:
                     return int(match.group(1))
@@ -401,12 +563,29 @@ class S3Client:
             return None
 
     async def object_exists(self, s3_key: str) -> bool:
-        """Return false for a not-yet-posted NOAA object (including 404)."""
+        """Return false for a not-yet-posted NOAA object (including 404).
+
+        Semantics engineered for 24/7 polling:
+
+        * ``404``        → definitively "not published" → ``False``;
+        * active throttle cooldown → cheap existence probes answer ``False``
+          immediately without touching the network (the poller tracks
+          throttles separately via :class:`S3Throttled` on real fetches);
+        * exhausted retries on a *request the caller needs* → ``S3Throttled``
+          propagates so discovery can mark the tick degraded instead of
+          mistaking rate-limits for a silent NOAA.
+        """
+        if self.throttled:
+            return False
         try:
             url = self.object_url(s3_key)
             await self._request("HEAD", url)
             return True
-        except (S3ObjectNotFound, S3HTTPError):
+        except S3ObjectNotFound:
+            return False
+        except S3Throttled:
+            raise
+        except S3HTTPError:
             return False
 
     async def fetch_idx(
@@ -479,11 +658,13 @@ __all__ = [
     "ForecastNotAvailable",
     "IdxEntry",
     "IdxParseError",
+    "RETRYABLE_STATUSES",
     "S3_BASE_URL",
     "S3Client",
     "S3ClientError",
     "S3HTTPError",
     "S3ObjectNotFound",
+    "S3Throttled",
     "build_grib_key",
     "build_idx_key",
     "calculate_byte_ranges",

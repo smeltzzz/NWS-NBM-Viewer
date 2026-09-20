@@ -27,10 +27,15 @@ PNG_MEDIA = "image/png"
 
 def _validate_zxy(z: int, x: int, y: int) -> None:
     if not (settings.tile_min_zoom <= z <= settings.tile_max_zoom):
-        raise HTTPException(status_code=422, detail=f"Zoom {z} outside [{settings.tile_min_zoom}, {settings.tile_max_zoom}]")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Zoom {z} outside [{settings.tile_min_zoom}, {settings.tile_max_zoom}]",
+        )
     n = 2**z
     if not (0 <= x < n) or not (0 <= y < n):
-        raise HTTPException(status_code=422, detail=f"Tile x/y out of range for zoom {z} (0..{n - 1})")
+        raise HTTPException(
+            status_code=422, detail=f"Tile x/y out of range for zoom {z} (0..{n - 1})"
+        )
 
 
 def _resolve_colormap(name: str) -> dict[int, tuple[int, int, int, int]]:
