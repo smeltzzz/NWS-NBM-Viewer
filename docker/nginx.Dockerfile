@@ -23,7 +23,7 @@ ARG NGX_BROTLI_REF=a71f9312c2deb28875acc7bacfdd5695a111aa53
 # --no-cache has no retry loop of its own, so wrap every network step.
 RUN set -eu; \
     retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "retry $i: $*"; sleep $((i * 4)); done; return 1; }; \
-    retry apk add --no-cache build-base git pcre2-dev zlib-dev
+    retry apk add --no-cache build-base cmake git pcre2-dev zlib-dev
 
 # Match the base image's nginx version exactly so the module ABI aligns.
 RUN set -eu; \
@@ -35,6 +35,10 @@ RUN set -eu; \
     && retry git clone --depth 1 "https://github.com/google/ngx_brotli.git" /build/ngx_brotli \
     && cd /build/ngx_brotli && retry git fetch --depth 1 origin "${NGX_BROTLI_REF}" && git checkout FETCH_HEAD \
     && retry git submodule update --init --depth 1 \
+    && cd /build/ngx_brotli/deps/brotli \
+    && mkdir -p out && cd out \
+    && cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBROTLI_DISABLE_TESTS=ON .. \
+    && cmake --build . -j"$(nproc)" \
     && cd "/build/nginx-${NGINX_VERSION}" \
     && ./configure --with-compat \
         --add-dynamic-module=/build/ngx_brotli \
