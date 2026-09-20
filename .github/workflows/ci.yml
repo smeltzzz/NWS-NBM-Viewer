@@ -94,6 +94,7 @@ jobs:
 
       - name: Build gateway image (runs nginx -t as part of the build)
         run: |
+          set -o pipefail
           # Pre-pull the base with retries: Docker Hub throttles anonymous
           # pulls from shared runner IPs; a warm cache then makes the build
           # itself immune to that burst limiting.
@@ -102,7 +103,15 @@ jobs:
             [ "$attempt" = 3 ] && exit 1
             echo "base pull failed (attempt $attempt) — retrying in 15s"; sleep 15
           done
-          docker build --pull=false --progress=plain -t nbm-gateway:ci -f docker/nginx.Dockerfile .
+          if ! docker build --pull=false --progress=plain -t nbm-gateway:ci \
+                 -f docker/nginx.Dockerfile . 2>&1 | tee /tmp/build.log; then
+            # Echo the failure into the job's annotations so it is readable
+            # without opening the raw logs (newlines URL-escaped for ::error::).
+            ERR=$(tail -60 /tmp/build.log | grep -vE '^\s*$' | sed 's|%|%25|g; s|:|%3A|g; s|\r||g' | paste -sd '%0A' -)
+            echo "::error::$ERR"
+            { echo '### Gateway build failure (last 60 lines)'; echo '```'; tail -60 /tmp/build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Validate gateway boot (with stub upstreams)
         run: |
