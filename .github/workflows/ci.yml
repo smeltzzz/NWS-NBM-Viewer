@@ -107,8 +107,13 @@ jobs:
                  -f docker/nginx.Dockerfile . 2>&1 | tee /tmp/build.log; then
             # Echo the failure into the job's annotations so it is readable
             # without opening the raw logs (newlines URL-escaped for ::error::).
-            ERR=$(tail -60 /tmp/build.log | grep -vE '^\s*$' | sed 's|%|%25|g; s|:|%3A|g; s|\r||g' | paste -sd '%0A' -)
-            echo "::error::$ERR"
+            # Annotations are size-capped — show the first real error with
+            # context, then the build's dying lines.
+            {
+              grep -B2 -A8 -m1 -E "error:|Error [0-9]+|undefined reference|cannot find" /tmp/build.log
+              echo '--- tail ---'
+              tail -12 /tmp/build.log
+            } | sed 's|%|%25|g; s|:|%3A|g; s|\r||g' | paste -sd '%0A' - | { read -r ERR; echo "::error::${ERR:0:3500}"; }
             { echo '### Gateway build failure (last 60 lines)'; echo '```'; tail -60 /tmp/build.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
