@@ -37,8 +37,11 @@ RUN set -eu; \
     && retry git submodule update --init --depth 1 \
     && cd /build/ngx_brotli/deps/brotli \
     && mkdir -p out && cd out \
-    && cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBROTLI_DISABLE_TESTS=ON .. \
-    && cmake --build . -j"$(nproc)" \
+    && cmake -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DBROTLI_DISABLE_TESTS=ON .. \
+    && cmake --build . --target brotlienc brotlicommon -j"$(nproc)" \
     && cd "/build/nginx-${NGINX_VERSION}" \
     && ./configure --with-compat \
         --add-dynamic-module=/build/ngx_brotli \
